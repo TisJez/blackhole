@@ -8,7 +8,6 @@ All tests auto-skip on CPU-only machines (no CuPy installed).
 """
 
 import numpy as np
-
 from conftest import requires_cupy
 
 # ---------------------------------------------------------------------------
