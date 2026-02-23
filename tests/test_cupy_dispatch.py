@@ -9,7 +9,7 @@ All tests auto-skip on CPU-only machines (no CuPy installed).
 
 import numpy as np
 
-from tests.conftest import requires_cupy
+from conftest import requires_cupy
 
 # ---------------------------------------------------------------------------
 # Helper
