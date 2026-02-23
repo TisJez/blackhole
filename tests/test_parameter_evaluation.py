@@ -1,6 +1,6 @@
 """Tests for blackhole.parameter_evaluation."""
 
-from blackhole.constants import ALPHA_COLD, M_sun
+from blackhole.constants import M_sun
 from blackhole.parameter_evaluation import EvaluationResult, ParameterEvaluation
 
 
