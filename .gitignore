@@ -1,3 +1,16 @@
+# IDE / tools
 .claude/
 .idea/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Simulation data
+src/data/*.csv
 CLAUDE.md
