@@ -1,0 +1,31 @@
+[project]
+name = "blackhole"
+version = "0.1.0"
+description = "Modelling X-ray outbursts from stellar compact objects"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "pandas",
+    "numba",
+    "numba-cuda[cu13]",
+    "cupy-cuda12x",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "jupyter",
+    "ruff",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
