@@ -5,7 +5,7 @@ description = "Modelling X-ray outbursts from stellar compact objects"
 requires-python = ">=3.12"
 dependencies = [
     "numpy",
-    "scipy",
+    "scipy>=1.14",
     "matplotlib",
     "pandas",
     "numba",
@@ -16,7 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 cpu = [
     "numpy",
-    "scipy",
+    "scipy>=1.14",
     "matplotlib",
     "pandas",
 ]

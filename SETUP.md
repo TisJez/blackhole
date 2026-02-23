@@ -37,6 +37,8 @@ source .venv/bin/activate
 
 ### 3. Install dependencies
 
+**With GPU (requires NVIDIA CUDA):**
+
 ```bash
 pip install -e ".[dev]"
 ```
@@ -45,9 +47,21 @@ This installs:
 - **Core**: numpy, scipy, matplotlib, pandas, numba, numba-cuda, cupy-cuda12x
 - **Dev**: pytest, jupyter, ruff
 
+**Without GPU (CPU-only dev/CI):**
+
+```bash
+pip install -e ".[cpu,dev]"
+```
+
+This installs only the CPU-compatible packages (numpy, scipy, matplotlib, pandas, pytest, jupyter, ruff).
+
 ### 4. Verify the installation
 
 ```bash
+# CPU-only verification
+python -c "from blackhole.constants import G; print('Package OK, G =', G)"
+
+# Full GPU verification
 python -c "import numpy, scipy, matplotlib, pandas, numba, cupy; print('All packages OK')"
 ```
 
@@ -182,21 +196,31 @@ ruff check .
 ## Running Tests
 
 ```bash
-pytest
+pytest                # Run all 119 tests
+pytest tests/ -v      # Verbose output
 ```
 
 ## Project Structure
 
 ```
 blackhole/
-├── pyproject.toml          # Project config, dependencies, tool settings
-├── requirements-lock.txt   # Pinned dependency versions
-├── .gitignore
+├── pyproject.toml
 ├── src/
+│   ├── blackhole/          # Python package (installable via pip)
+│   │   ├── __init__.py     # gpu_jit decorator (CUDA → CPU numba → passthrough)
+│   │   ├── constants.py    # CGS physical constants
+│   │   ├── opacity.py      # Opacity regimes
+│   │   ├── viscosity.py    # Temperature-dependent alpha viscosity
+│   │   ├── steady_state.py # Shakura-Sunyaev steady-state disk structure
+│   │   ├── disk_physics.py # Core disk physics
+│   │   ├── irradiation.py  # Irradiation feedback
+│   │   ├── evolution.py    # Surface density time-stepping
+│   │   ├── solvers.py      # Newton solvers (temperature & scale height)
+│   │   └── luminosity.py   # Radiative luminosity & effective temperature
 │   ├── notebooks/          # Jupyter notebooks (simulations & analysis)
 │   ├── graphs/             # Output plots from notebooks
 │   └── data/               # CSV simulation data (git-ignored)
-├── tests/                  # Test directory
+├── tests/                  # Unit tests (119 tests)
 └── .github/workflows/      # CI/CD pipelines
 ```
 
