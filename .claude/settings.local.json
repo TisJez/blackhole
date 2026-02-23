@@ -9,7 +9,14 @@
       "Bash(git -C /c/blackhole/blackhole branch:*)",
       "Bash(git -C /c/blackhole/blackhole config --list)",
       "Bash(git -C /c/blackhole/blackhole log --all --graph --oneline)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(git checkout:*)",
+      "Bash(git merge:*)",
+      "Bash(git push:*)",
+      "Bash(git stash:*)",
+      "Bash(git add:*)",
+      "Bash(git reset:*)",
+      "Bash(gh auth:*)"
     ]
   }
 }
