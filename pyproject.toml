@@ -14,11 +14,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+cpu = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "pandas",
+]
 dev = [
     "pytest",
     "jupyter",
     "ruff",
 ]
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.ruff]
 line-length = 120
