@@ -4,70 +4,78 @@ Extracted from diskequations_SS_bath_params.ipynb.
 All functions take explicit physical parameters rather than reading globals.
 """
 
+import numpy as np
 
-from blackhole import get_xp
+from blackhole import cpu_jit
 from blackhole.constants import M_DOT_CRIT, G, M_sun, c
 
 # ---------------------------------------------------------------------------
 # Dimensionless helpers
 # ---------------------------------------------------------------------------
 
+@cpu_jit
 def r_g(M):
     """Schwarzschild radius (cm)."""
     return 2.0 * G * M / (c**2)
 
 
+@cpu_jit
 def r_hat(r, M):
     """Radius in units of Schwarzschild radius."""
     return r / r_g(M)
 
 
+@cpu_jit
 def m_rel(M):
     """Mass in solar units."""
     return M / M_sun
 
 
+@cpu_jit
 def m_dot_rel(M_dot):
     """Accretion rate in units of M_dot_crit."""
     return M_dot / M_DOT_CRIT
 
 
+@cpu_jit
 def f_boundary(r, M):
     """Inner boundary correction factor f(r)."""
-    xp = get_xp(r)
-    return 1.0 - xp.sqrt(3.0 * r_g(M) / r)
+    return 1.0 - np.sqrt(3.0 * r_g(M) / r)
 
 
 # ---------------------------------------------------------------------------
 # Region boundaries (in r_hat units)
 # ---------------------------------------------------------------------------
 
+@cpu_jit
 def border_inner_middle(alpha, M, M_dot):
     """r_hat boundary between inner and middle regions."""
-    xp = get_xp(alpha, M_dot)
-    return 150.0 * xp.float_power(alpha * m_rel(M), 2.0 / 21.0) * xp.float_power(m_dot_rel(M_dot), 16.0 / 21.0)
+    return 150.0 * (alpha * m_rel(M)) ** (2.0 / 21.0) * m_dot_rel(M_dot) ** (16.0 / 21.0)
 
 
+@cpu_jit
 def border_middle_outer(M_dot):
     """r_hat boundary between middle and outer regions."""
-    xp = get_xp(M_dot)
-    return 6.3e3 * xp.float_power(m_dot_rel(M_dot), 2.0 / 3.0)
+    return 6.3e3 * m_dot_rel(M_dot) ** (2.0 / 3.0)
 
 
 # ---------------------------------------------------------------------------
 # INNER REGION (radiation pressure dominated, electron scattering opacity)
 # ---------------------------------------------------------------------------
 
+@cpu_jit
 def H_inner(r, M, M_dot, alpha):
     """Disk scale height — inner region (cm)."""
     return 5.5e4 * m_rel(M) * m_dot_rel(M_dot) * f_boundary(r, M)
 
 
+@cpu_jit
 def Sigma_inner(r, M, M_dot, alpha):
     """Surface density — inner region (g/cm^2)."""
     return 1e2 * alpha**(-1) * m_dot_rel(M_dot)**(-1) * r_hat(r, M)**(3.0 / 2.0) * f_boundary(r, M)**(-1)
 
 
+@cpu_jit
 def rho_inner(r, M, M_dot, alpha):
     """Midplane density — inner region (g/cm^3)."""
     return (
@@ -75,11 +83,13 @@ def rho_inner(r, M, M_dot, alpha):
     )
 
 
+@cpu_jit
 def T_c_inner(r, M, M_dot, alpha):
     """Central temperature — inner region (K)."""
     return 4.9e7 * alpha**(-1.0 / 4.0) * m_rel(M)**(-1.0 / 4.0) * r_hat(r, M)**(-3.0 / 8.0)
 
 
+@cpu_jit
 def tau_inner(r, M, M_dot, alpha):
     """Effective optical depth — inner region."""
     return (
@@ -92,6 +102,7 @@ def tau_inner(r, M, M_dot, alpha):
     )
 
 
+@cpu_jit
 def u_r_inner(r, M, M_dot, alpha):
     """Radial drift velocity — inner region (cm/s)."""
     return 7.6e8 * alpha * m_dot_rel(M_dot)**2 * r_hat(r, M)**(-5.0 / 2.0) * f_boundary(r, M)
@@ -101,6 +112,7 @@ def u_r_inner(r, M, M_dot, alpha):
 # MIDDLE REGION (gas pressure dominated, electron scattering opacity)
 # ---------------------------------------------------------------------------
 
+@cpu_jit
 def H_middle(r, M, M_dot, alpha):
     """Disk scale height — middle region (cm)."""
     return (
@@ -113,6 +125,7 @@ def H_middle(r, M, M_dot, alpha):
     )
 
 
+@cpu_jit
 def Sigma_middle(r, M, M_dot, alpha):
     """Surface density — middle region (g/cm^2)."""
     return (
@@ -125,6 +138,7 @@ def Sigma_middle(r, M, M_dot, alpha):
     )
 
 
+@cpu_jit
 def rho_middle(r, M, M_dot, alpha):
     """Midplane density — middle region (g/cm^3)."""
     return (
@@ -137,6 +151,7 @@ def rho_middle(r, M, M_dot, alpha):
     )
 
 
+@cpu_jit
 def T_c_middle(r, M, M_dot, alpha):
     """Central temperature — middle region (K)."""
     return (
@@ -149,6 +164,7 @@ def T_c_middle(r, M, M_dot, alpha):
     )
 
 
+@cpu_jit
 def tau_middle(r, M, M_dot, alpha):
     """Effective optical depth — middle region."""
     return (
@@ -161,6 +177,7 @@ def tau_middle(r, M, M_dot, alpha):
     )
 
 
+@cpu_jit
 def u_r_middle(r, M, M_dot, alpha):
     """Radial drift velocity — middle region (cm/s)."""
     return (
@@ -177,6 +194,7 @@ def u_r_middle(r, M, M_dot, alpha):
 # OUTER REGION (gas pressure dominated, Kramers opacity)
 # ---------------------------------------------------------------------------
 
+@cpu_jit
 def H_outer(r, M, M_dot, alpha):
     """Disk scale height — outer region (cm)."""
     return (
@@ -189,6 +207,7 @@ def H_outer(r, M, M_dot, alpha):
     )
 
 
+@cpu_jit
 def Sigma_outer(r, M, M_dot, alpha):
     """Surface density — outer region (g/cm^2)."""
     return (
@@ -201,6 +220,7 @@ def Sigma_outer(r, M, M_dot, alpha):
     )
 
 
+@cpu_jit
 def rho_outer(r, M, M_dot, alpha):
     """Midplane density — outer region (g/cm^3)."""
     return (
@@ -213,6 +233,7 @@ def rho_outer(r, M, M_dot, alpha):
     )
 
 
+@cpu_jit
 def T_c_outer(r, M, M_dot, alpha):
     """Central temperature — outer region (K)."""
     return (
@@ -225,6 +246,7 @@ def T_c_outer(r, M, M_dot, alpha):
     )
 
 
+@cpu_jit
 def tau_outer(r, M, M_dot, alpha):
     """Effective optical depth — outer region."""
     return (
@@ -236,6 +258,7 @@ def tau_outer(r, M, M_dot, alpha):
     )
 
 
+@cpu_jit
 def u_r_outer(r, M, M_dot, alpha):
     """Radial drift velocity — outer region (cm/s)."""
     return (
