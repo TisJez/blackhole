@@ -59,8 +59,12 @@ def calculate_timestep(X, nu, dX):
     return 0.5 * float(X[0]) ** 2 * dX ** 2 / (12.0 * max_nu)
 
 
-def disk_evap(r, M_star):
+def disk_evap(r, M_star, L_ratio=1.0):
     """X-ray evaporation rate at radius *r*.
+
+    The evaporation rate is scaled by *L_ratio* = L_actual / L_edd so that
+    evaporation is reduced when the accretion luminosity is sub-Eddington
+    (Liu et al. 2002).
 
     Parameters
     ----------
@@ -68,6 +72,9 @@ def disk_evap(r, M_star):
         Radius (cm).
     M_star : float
         Central object mass (g).
+    L_ratio : float, optional
+        Ratio of actual accretion luminosity to Eddington luminosity.
+        Default 1.0 (full Eddington-rate evaporation, backward compatible).
 
     Returns
     -------
@@ -81,10 +88,10 @@ def disk_evap(r, M_star):
     M_ev = 0.08 * M_edd * (
         (r / R_s) ** (1.0 / 4.0) + epsilon * (r / (800.0 * R_s)) ** 2
     ) ** (-1)
-    return M_ev
+    return M_ev * L_ratio
 
 
-def add_mass(Sigma, M_dot, dt, X, N, X_K, X_N, dX, min_Sigma):
+def add_mass(Sigma, M_dot, dt, X, N, X_K, X_N, dX, min_Sigma, sigma_cap=200.0):
     """Add mass at the outer disk edge with angular momentum conservation.
 
     The notebook version mutated globals ``j_val``, ``dMj``, ``dMj1``.
@@ -110,6 +117,11 @@ def add_mass(Sigma, M_dot, dt, X, N, X_K, X_N, dX, min_Sigma):
         Grid spacing in X.
     min_Sigma : float
         Minimum surface density floor.
+    sigma_cap : float, optional
+        Safety cap for deposited surface density.  Mass is only deposited
+        when the computed Sigma at the deposition cell is below this value.
+        Default 200.0 (appropriate for stellar-mass systems).  For SMBHs,
+        scale from ``Sigma_max`` to allow higher surface densities.
 
     Returns
     -------
@@ -146,9 +158,9 @@ def add_mass(Sigma, M_dot, dt, X, N, X_K, X_N, dX, min_Sigma):
             sjx = Sj / X[j + 1] if j + 1 < N else Sj / X[j]
             sj1x = Sj1 / X[j]
 
-            if sjx < 200:
+            if sjx < sigma_cap:
                 new_Sigma[j] = max(sjx, min_Sigma)
-            if sj1x < 200:
+            if sj1x < sigma_cap:
                 new_Sigma[j - 1] = max(sj1x, min_Sigma)
 
             j_val = j
@@ -289,7 +301,11 @@ def evolve_surface_density(Sigma, dt, nu, X, dX, N, min_Sigma,
         dr = np.diff(r)
         dr = np.append(dr, dr[-1])  # pad last cell
         M_ev = evap_func(r[1:-1])
-        new_Sigma[1:-1] -= M_ev * dt / (2.0 * np.pi * r[1:-1] * dr[1:-1])
+        dSigma_evap = M_ev * dt / (2.0 * np.pi * r[1:-1] * dr[1:-1])
+        # Cap: cannot remove more mass than available above the floor
+        available = np.maximum(new_Sigma[1:-1] - min_Sigma, 0.0)
+        dSigma_evap = np.minimum(dSigma_evap, available)
+        new_Sigma[1:-1] -= dSigma_evap
 
     # Final cleanup: replace any remaining NaN/inf and enforce floor
     np.nan_to_num(new_Sigma, copy=False, nan=min_Sigma, posinf=min_Sigma, neginf=min_Sigma)

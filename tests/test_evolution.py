@@ -148,3 +148,79 @@ class TestEvolveSurfaceDensity:
             tidal_params=tidal,
         )
         assert np.all(result >= min_Sigma)
+
+    def test_evaporation_capped_at_available(self):
+        """Evaporation cannot remove more mass than available above min_Sigma."""
+        N = 100
+        min_Sigma = 1e-5
+        Sigma, nu, X, dX = self._make_state(N)
+        # Set Sigma very low so evaporation would overshoot
+        Sigma[:] = min_Sigma * 2.0
+
+        def heavy_evap(r_arr):
+            # Return a very large evaporation rate
+            return np.full_like(r_arr, 1e30)
+
+        result = evolve_surface_density(
+            Sigma, 1e10, nu, X, dX, N, min_Sigma,
+            evap_func=heavy_evap,
+        )
+        assert np.all(result >= min_Sigma)
+
+
+class TestDiskEvapLRatio:
+    def test_l_ratio_scales_linearly(self):
+        """disk_evap with L_ratio=0.5 returns half the default rate."""
+        r = np.array([1e10, 1e11, 1e12])
+        full = disk_evap(r, M_STAR)
+        half = disk_evap(r, M_STAR, L_ratio=0.5)
+        np.testing.assert_allclose(half, 0.5 * full)
+
+    def test_l_ratio_zero_gives_zero(self):
+        """disk_evap with L_ratio=0 returns zero evaporation."""
+        r = np.array([1e10, 1e11])
+        result = disk_evap(r, M_STAR, L_ratio=0.0)
+        np.testing.assert_array_equal(result, 0.0)
+
+    def test_l_ratio_default_unchanged(self):
+        """Default L_ratio=1.0 gives the same result as the old signature."""
+        r = np.logspace(9, 12, 20)
+        default = disk_evap(r, M_STAR)
+        explicit = disk_evap(r, M_STAR, L_ratio=1.0)
+        np.testing.assert_array_equal(default, explicit)
+
+
+class TestAddMassSigmaCap:
+    def _make_grid(self, N=100):
+        r_in = 1e9
+        r_out = 1e12
+        r = np.linspace(r_in, r_out, N)
+        X = X_func(r)
+        dX = X[1] - X[0]
+        X_K = X[int(N * 0.7)]
+        X_N = X[-1]
+        return X, dX, X_K, X_N
+
+    def test_default_sigma_cap_backward_compatible(self):
+        """Default sigma_cap=200 gives the same result as before."""
+        N = 100
+        X, dX, X_K, X_N = self._make_grid(N)
+        Sigma = np.full(N, 10.0)
+        r1 = add_mass(Sigma, 1e16, 1.0, X, N, X_K, X_N, dX, 1e-10)
+        r2 = add_mass(Sigma, 1e16, 1.0, X, N, X_K, X_N, dX, 1e-10, sigma_cap=200.0)
+        np.testing.assert_array_equal(r1.Sigma, r2.Sigma)
+
+    def test_large_sigma_cap_allows_higher_deposition(self):
+        """A larger sigma_cap allows mass to be deposited where default would block."""
+        N = 100
+        X, dX, X_K, X_N = self._make_grid(N)
+        # Start with high Sigma that might be near the cap
+        Sigma = np.full(N, 150.0)
+        # With default cap=200, deposition near 150+deposit may be blocked
+        r_default = add_mass(Sigma, 1e18, 100.0, X, N, X_K, X_N, dX, 1e-10,
+                             sigma_cap=200.0)
+        r_large = add_mass(Sigma, 1e18, 100.0, X, N, X_K, X_N, dX, 1e-10,
+                           sigma_cap=1e6)
+        # With a much larger cap, more mass should be deposited
+        # (or at least the same amount)
+        assert np.sum(r_large.Sigma) >= np.sum(r_default.Sigma)

@@ -14,6 +14,7 @@ class TestEvaluationResult:
             deposition_margin=10.0,
             sigma_ss=100.0, sigma_max=50.0,
             instability_ratio=2.0, t_viscous=1e6,
+            t_thermal=1e4, thermal_resolution_ok=True, thermal_margin=10.0,
         )
         assert r.valid is True
 
@@ -26,6 +27,7 @@ class TestEvaluationResult:
             deposition_margin=0.1,
             sigma_ss=100.0, sigma_max=50.0,
             instability_ratio=2.0, t_viscous=1e6,
+            t_thermal=1e4, thermal_resolution_ok=True, thermal_margin=2.0,
         )
         assert r.valid is False
         assert r.mass_deposition_ok is False
@@ -39,6 +41,7 @@ class TestEvaluationResult:
             deposition_margin=10.0,
             sigma_ss=1.0, sigma_max=50.0,
             instability_ratio=0.02, t_viscous=1e6,
+            t_thermal=1e4, thermal_resolution_ok=True, thermal_margin=200.0,
         )
         assert r.valid is False
         assert r.instability_ok is False
@@ -54,6 +57,7 @@ class TestEvaluationResult:
                     deposition_margin=10.0,
                     sigma_ss=1.0, sigma_max=1.0,
                     instability_ratio=1.0, t_viscous=1e6,
+                    t_thermal=1e4, thermal_resolution_ok=True, thermal_margin=10.0,
                 )
                 assert r.valid == (dep_ok and inst_ok)
 
@@ -193,6 +197,7 @@ class TestParameterEvaluation:
         assert result.sigma_ss > 0
         assert result.sigma_max > 0
         assert result.t_viscous > 0
+        assert result.t_thermal > 0
 
     def test_multiple_evaluations_same_system(self):
         """evaluate() can be called multiple times on the same system."""
@@ -205,6 +210,8 @@ class TestParameterEvaluation:
         # Same system → same sigma values
         assert r1.sigma_ss == r2.sigma_ss
         assert r1.sigma_max == r2.sigma_max
+        # Same system → same thermal timescale
+        assert r1.t_thermal == r2.t_thermal
         # Different dt → different deposition results
         assert r1.mass_deposition_ok is True
         assert r2.mass_deposition_ok is False
@@ -235,3 +242,60 @@ class TestParameterEvaluation:
         assert pe.N == 103
         assert len(pe.X) == 103
         assert len(pe.nu_array) == 103
+
+    # --- Thermal timescale tests ---
+
+    def test_stellar_mass_thermal_resolved(self):
+        """Stellar-mass systems resolve the thermal timescale without adaptive dt."""
+        pe = ParameterEvaluation(
+            M_star=9 * M_sun, R_1=5e8, R_K=2.2e11, R_N=4.2e11,
+            M_dot=1e17,
+        )
+        result = pe.evaluate(dt_mult=30, dt_floor=200)
+        assert result.thermal_resolution_ok is True
+        assert result.thermal_margin > 1.0
+
+    def test_sgr_a_thermal_unresolved_at_cap(self):
+        """Sgr A* with dt_cap=2e9 exceeds the thermal timescale."""
+        pe = ParameterEvaluation(
+            M_star=4.3e6 * M_sun, R_1=4e12, R_K=1e15, R_N=2e15,
+            M_dot=1e22, alpha_cold=0.02,
+        )
+        result = pe.evaluate(dt_mult=300, dt_floor=1e5, dt_cap=2e9)
+        assert result.thermal_resolution_ok is False
+        assert result.thermal_margin < 1.0
+        # But mass deposition and instability are still OK
+        assert result.valid is True
+
+    def test_thermal_margin_matches_ratio(self):
+        """thermal_margin = thermal_mult * t_thermal / dt_used."""
+        pe = ParameterEvaluation(
+            M_star=M_sun, R_1=5e8, R_K=2.1e10, R_N=8e10,
+            M_dot=5e16,
+        )
+        result = pe.evaluate(dt_mult=10, dt_floor=200, thermal_mult=20.0)
+        expected = 20.0 * result.t_thermal / result.dt_used
+        assert abs(result.thermal_margin - expected) < 1e-10
+
+    def test_custom_thermal_mult(self):
+        """Custom thermal_mult changes the resolution check."""
+        pe = ParameterEvaluation(
+            M_star=4.3e6 * M_sun, R_1=4e12, R_K=1e15, R_N=2e15,
+            M_dot=1e22, alpha_cold=0.02,
+        )
+        # With a very large thermal_mult, even Sgr A* passes
+        result = pe.evaluate(dt_mult=300, dt_floor=1e5, dt_cap=2e9,
+                             thermal_mult=1e6)
+        assert result.thermal_resolution_ok is True
+
+    def test_t_thermal_positive(self):
+        """Thermal timescale is always positive."""
+        for cfg in [
+            dict(M_star=M_sun, R_1=5e8, R_K=2.1e10, R_N=8e10, M_dot=5e16),
+            dict(M_star=9 * M_sun, R_1=5e8, R_K=2.2e11, R_N=4.2e11, M_dot=1e17),
+            dict(M_star=4.3e6 * M_sun, R_1=4e12, R_K=1e15, R_N=2e15,
+                 M_dot=1e22, alpha_cold=0.02),
+        ]:
+            pe = ParameterEvaluation(**cfg)
+            result = pe.evaluate(dt_mult=10)
+            assert result.t_thermal > 0

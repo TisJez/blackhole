@@ -42,6 +42,14 @@ class EvaluationResult:
         Sigma_ss / Sigma_max.
     t_viscous : float
         Viscous timescale at R_K (s).
+    t_thermal : float
+        Thermal timescale at R_K with alpha_hot (s).
+    thermal_resolution_ok : bool
+        True if dt_used <= thermal_mult * t_thermal. When False, the
+        simulation needs adaptive timestep control during outbursts.
+    thermal_margin : float
+        thermal_mult * t_thermal / dt_used (>1 means resolved without
+        adaptive dt; <1 means adaptive dt is required).
     """
 
     mass_deposition_ok: bool
@@ -55,6 +63,9 @@ class EvaluationResult:
     sigma_max: float
     instability_ratio: float
     t_viscous: float
+    t_thermal: float
+    thermal_resolution_ok: bool
+    thermal_margin: float
 
 
 class ParameterEvaluation:
@@ -135,7 +146,7 @@ class ParameterEvaluation:
         # Viscosity at R_K (interpolate to circularisation radius)
         self.nu_K = float(np.interp(self.X_K, self.X, self.nu_array))
 
-    def evaluate(self, dt_mult, dt_floor=0.0, dt_cap=None):
+    def evaluate(self, dt_mult, dt_floor=0.0, dt_cap=None, thermal_mult=20.0):
         """Evaluate parameter constraints for a given timestep configuration.
 
         Parameters
@@ -146,6 +157,12 @@ class ParameterEvaluation:
             Minimum allowed timestep (s).
         dt_cap : float or None
             Maximum allowed timestep (s). None means no cap.
+        thermal_mult : float
+            Maximum number of thermal timescales per timestep during
+            outbursts (default 20). The thermal timescale at R_K is
+            ``t_th = 1 / (alpha_hot * Omega_K)``. If ``dt_used`` exceeds
+            ``thermal_mult * t_th``, the alpha(T) transition is unresolved
+            and the simulation requires adaptive timestep control.
 
         Returns
         -------
@@ -173,6 +190,14 @@ class ParameterEvaluation:
         # 6. Viscous timescale at R_K
         t_viscous = self.R_K**2 / self.nu_K
 
+        # 7. Thermal timescale at R_K with alpha_hot
+        #    t_thermal = 1 / (alpha_hot * Omega_K) where Omega_K = sqrt(G*M/R^3)
+        omega_K = np.sqrt(G * self.M_star / self.R_K**3)
+        t_thermal = 1.0 / (self.alpha_hot * omega_K)
+        dt_thermal_limit = thermal_mult * t_thermal
+        thermal_resolution_ok = bool(dt_used <= dt_thermal_limit)
+        thermal_margin = dt_thermal_limit / dt_used
+
         # Constraint checks
         mass_deposition_ok = bool(dt_used < dt_max)
         deposition_margin = dt_max / dt_used
@@ -191,4 +216,7 @@ class ParameterEvaluation:
             sigma_max=sigma_max,
             instability_ratio=instability_ratio,
             t_viscous=t_viscous,
+            t_thermal=t_thermal,
+            thermal_resolution_ok=thermal_resolution_ok,
+            thermal_margin=thermal_margin,
         )
