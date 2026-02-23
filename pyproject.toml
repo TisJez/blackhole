@@ -27,5 +27,13 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 
+[tool.ruff.lint.per-file-ignores]
+"*.ipynb" = [
+    "F821",  # Undefined name — variables cross cell boundaries and %run
+    "F811",  # Redefined name — notebooks intentionally redefine functions across cells
+    "F841",  # Unused variable — notebooks assign intermediates for inspection
+    "E402",  # Import not at top — notebooks import inline
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
