@@ -2,19 +2,21 @@
 
 import functools
 
-import numpy
 
-
-def get_xp(*args):
-    """Return cupy if any arg is a CuPy array, else numpy."""
-    try:
-        import cupy
-        for a in args:
-            if isinstance(a, cupy.ndarray):
-                return cupy
-    except ImportError:
-        pass
-    return numpy
+def cpu_jit(func=None, **kwargs):
+    """CPU-only numba JIT. Falls back to passthrough without numba."""
+    def decorator(fn):
+        try:
+            from numba import jit as _jit
+            return _jit(nopython=True, **kwargs)(fn)
+        except ImportError:
+            @functools.wraps(fn)
+            def wrapper(*args, **kw):
+                return fn(*args, **kw)
+            return wrapper
+    if func is not None:
+        return decorator(func)
+    return decorator
 
 
 def gpu_jit(func=None, **kwargs):
