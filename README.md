@@ -1,6 +1,7 @@
 # Black Hole X-ray Outburst
 
 Python project for modelling X-ray outbursts from stellar compact objects (black holes and white dwarfs). Uses numerical methods to solve accretion disk equations and visualize outburst behavior.
+Written for the Durham University 2024 MPhys Master's Project by Jezreel Penuliar: "Modelling X-Ray Outbursts in Black Hole Accretion Disks" (Supervisor: Prof. Chris Done)
 
 ## Project Structure
 
