@@ -4,69 +4,72 @@ Extracted from the GPU_timedep notebook. Functions that referenced globals
 (M_star, etc.) now take them as explicit parameters.
 """
 
+import numpy as np
 
-from blackhole import get_xp
+from blackhole import cpu_jit
 from blackhole.constants import G, a_rad, mu, r_gas
 
 # ---------------------------------------------------------------------------
 # Coordinate transforms
 # ---------------------------------------------------------------------------
 
+@cpu_jit
 def X_func(r):
     """Transform radius to X coordinate: X = 2*sqrt(r)."""
-    xp = get_xp(r)
-    return 2.0 * xp.sqrt(r)
+    return 2.0 * np.sqrt(r)
 
 
+@cpu_jit
 def R_func(x):
     """Transform X coordinate back to radius: r = x^2 / 4."""
-    xp = get_xp(x)
-    return xp.float_power(x, 2) / 4.0
+    return x ** 2 / 4.0
 
 
 # ---------------------------------------------------------------------------
 # Keplerian quantities
 # ---------------------------------------------------------------------------
 
+@cpu_jit
 def omega(R, M_star):
     """Keplerian angular velocity (rad/s)."""
-    xp = get_xp(R)
-    return xp.sqrt(G * M_star / xp.float_power(R, 3))
+    return np.sqrt(G * M_star / R ** 3)
 
 
 # ---------------------------------------------------------------------------
 # Thermodynamic / structural quantities
 # ---------------------------------------------------------------------------
 
+@cpu_jit
 def kinematic_viscosity(H, R, alpha, M_star):
     """Kinematic viscosity nu = (2/3) * alpha * omega * H^2."""
     return (2.0 / 3.0) * alpha * omega(R, M_star) * H**2
 
 
+@cpu_jit
 def density(H, Sigma):
     """Midplane density rho = Sigma / (2*H)."""
     return Sigma / (2.0 * H)
 
 
+@cpu_jit
 def pressure(H, Sigma, T):
     """Total pressure (gas + radiation)."""
-    xp = get_xp(H, Sigma, T)
     p_gas = (r_gas * Sigma * T) / (mu * 2.0 * H)
-    p_rad = (1.0 / 3.0) * a_rad * xp.float_power(T, 4)
+    p_rad = (1.0 / 3.0) * a_rad * T ** 4
     return p_gas + p_rad
 
 
+@cpu_jit
 def pressure_2(H, Sigma, R, M_star):
     """Pressure from vertical hydrostatic equilibrium."""
-    xp = get_xp(H, Sigma, R)
-    return 0.5 * Sigma * H * (G * M_star / xp.float_power(R, 3))
+    return 0.5 * Sigma * H * (G * M_star / R ** 3)
 
 
+@cpu_jit
 def scale_height(Sigma, p, R, M_star):
     """Scale height from pressure balance: H = sqrt(2*p*R^3 / (Sigma*G*M))."""
-    xp = get_xp(Sigma, p, R)
     a1 = 2.0 * p / Sigma
-    a2 = xp.float_power(R, 3) / (G * M_star)
+    a2 = R ** 3 / (G * M_star)
     return a1 * a2
 
 
@@ -74,18 +77,20 @@ def scale_height(Sigma, p, R, M_star):
 # Surface-density helpers
 # ---------------------------------------------------------------------------
 
+@cpu_jit
 def S_factor(X, Sigma):
     """S = X * Sigma (conserved variable for diffusion equation)."""
     return X * Sigma
 
 
+@cpu_jit
 def Sigma_from_S(S, X):
     """Recover Sigma from S."""
     return S / X
 
 
+@cpu_jit
 def Marr(X, Sigma, dX):
     """Mass array: M_i = pi * S_i * X_i^2 * dX / 4."""
-    xp = get_xp(X, Sigma)
     S_f = X * Sigma
-    return xp.pi * S_f * X**2 * dX / 4.0
+    return np.pi * S_f * X**2 * dX / 4.0

@@ -20,6 +20,7 @@ dev = [
     "pytest",
     "jupyter",
     "ruff",
+    "numba",
 ]
 
 [tool.setuptools.packages.find]

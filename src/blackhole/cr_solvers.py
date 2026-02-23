@@ -10,7 +10,6 @@ Extracted from GPU_cre_equations_bath_params.ipynb and GPU_cr_graph_normal_bh.ip
 import numpy as np
 from scipy import optimize
 
-from blackhole import get_xp
 from blackhole.constants import G, M_sun, a_rad, c, k_B, m_p, mu
 from blackhole.opacity import kappa_simple, kappa_tot, kappa_tot_drho
 
@@ -25,8 +24,7 @@ def p_gas(rho, T):
 
 def p_rad(T):
     """Radiation pressure."""
-    xp = get_xp(T)
-    return (a_rad / 3.0) * xp.float_power(T, 4)
+    return (a_rad / 3.0) * T ** 4
 
 
 def p_tot(rho, T):
@@ -36,8 +34,7 @@ def p_tot(rho, T):
 
 def omega_kepler(r, M_star):
     """Keplerian angular velocity."""
-    xp = get_xp(r)
-    return xp.sqrt(G * M_star / xp.float_power(r, 3))
+    return np.sqrt(G * M_star / r ** 3)
 
 
 # ---------------------------------------------------------------------------
@@ -60,11 +57,10 @@ def h_2(r, rho, M_star, M_dot, T):
     T : float
         Midplane temperature (K).
     """
-    xp = get_xp(r, rho, T)
     a1 = p_tot(rho, T)
-    a2 = rho * G * M_star / xp.float_power(r, 3)
-    a3 = 4.0 * xp.pi * G * xp.float_power(rho, 2)
-    return xp.sqrt(a1 / (a2 + a3))
+    a2 = rho * G * M_star / r ** 3
+    a3 = 4.0 * np.pi * G * rho ** 2
+    return np.sqrt(a1 / (a2 + a3))
 
 
 # ---------------------------------------------------------------------------
@@ -73,24 +69,24 @@ def h_2(r, rho, M_star, M_dot, T):
 
 def _f_1_1(T):
     """Radiative term: (a_rad * T^4)^2."""
-    return np.float_power(a_rad, 2) * np.float_power(T, 8)
+    return a_rad ** 2 * T ** 8
 
 
 def _f_1_2(M_star, M_dot, r, rho, T):
     """Viscous dissipation term with fitted (total) opacity."""
-    n1 = 9.0 * G * np.float_power(M_star, 2) * np.float_power(M_dot, 2)
-    n2 = rho * p_tot(rho, T) * np.float_power(kappa_tot(rho, T), 2)
-    d1 = 16.0 * np.float_power(np.pi, 2) * np.float_power(c, 2) * np.float_power(r, 3)
-    d2 = M_star + 4.0 * np.pi * rho * np.float_power(r, 3)
+    n1 = 9.0 * G * M_star ** 2 * M_dot ** 2
+    n2 = rho * p_tot(rho, T) * kappa_tot(rho, T) ** 2
+    d1 = 16.0 * np.pi ** 2 * c ** 2 * r ** 3
+    d2 = M_star + 4.0 * np.pi * rho * r ** 3
     return (n1 / d1) * (n2 / d2)
 
 
 def _f_1_2_old(M_star, M_dot, r, rho, T):
     """Viscous dissipation term with Kramers (simple) opacity."""
-    n1 = 9.0 * G * np.float_power(M_star, 2) * np.float_power(M_dot, 2)
-    n2 = rho * p_tot(rho, T) * np.float_power(kappa_simple(rho, T), 2)
-    d1 = 16.0 * np.float_power(np.pi, 2) * np.float_power(c, 2) * np.float_power(r, 3)
-    d2 = M_star + 4.0 * np.pi * rho * np.float_power(r, 3)
+    n1 = 9.0 * G * M_star ** 2 * M_dot ** 2
+    n2 = rho * p_tot(rho, T) * kappa_simple(rho, T) ** 2
+    d1 = 16.0 * np.pi ** 2 * c ** 2 * r ** 3
+    d2 = M_star + 4.0 * np.pi * rho * r ** 3
     return (n1 / d1) * (n2 / d2)
 
 
@@ -110,15 +106,15 @@ def f_1_old(M_star, M_dot, r, rho, T):
 
 def _f_2_1(M_star, M_dot, r, rho, alpha_var):
     """Viscous stress term."""
-    n = np.float_power(G, 2) * np.float_power(M_dot, 2) * M_star * rho
-    d = 16.0 * np.float_power(np.pi, 2) * np.float_power(alpha_var, 2) * np.float_power(r, 6)
+    n = G ** 2 * M_dot ** 2 * M_star * rho
+    d = 16.0 * np.pi ** 2 * alpha_var ** 2 * r ** 6
     return n / d
 
 
 def _f_2_2(M_star, r, rho, T):
     """Pressure term."""
-    n = np.float_power(p_tot(rho, T), 3)
-    d = M_star + 4.0 * np.pi * rho * np.float_power(r, 3)
+    n = p_tot(rho, T) ** 3
+    d = M_star + 4.0 * np.pi * rho * r ** 3
     return n / d
 
 
@@ -138,34 +134,34 @@ def _kappa_simple_drho(rho, T, drho=1e-5):
 
 def _df_1_dr(M_star, M_dot, r, rho, T):
     """d(f_1)/dr with fitted opacity."""
-    n1 = 9.0 * G * np.float_power(M_star, 2) * np.float_power(M_dot, 2)
-    n2 = rho * p_tot(rho, T) * np.float_power(kappa_tot(rho, T), 2)
-    d1 = 16.0 * np.float_power(np.pi, 2) * np.float_power(c, 2) * np.float_power(r, 3)
-    d2 = M_star + 4.0 * np.pi * rho * np.float_power(r, 3)
+    n1 = 9.0 * G * M_star ** 2 * M_dot ** 2
+    n2 = rho * p_tot(rho, T) * kappa_tot(rho, T) ** 2
+    d1 = 16.0 * np.pi ** 2 * c ** 2 * r ** 3
+    d2 = M_star + 4.0 * np.pi * rho * r ** 3
     f3 = 3.0 / r
-    f4 = 12.0 * np.pi * rho * np.float_power(r, 2) / d2
+    f4 = 12.0 * np.pi * rho * r ** 2 / d2
     return (n1 / d1) * (n2 / d2) * (f3 + f4)
 
 
 def _df_1_dr_old(M_star, M_dot, r, rho, T):
     """d(f_1)/dr with Kramers opacity."""
-    n1 = 9.0 * G * np.float_power(M_star, 2) * np.float_power(M_dot, 2)
-    n2 = rho * p_tot(rho, T) * np.float_power(kappa_simple(rho, T), 2)
-    d1 = 16.0 * np.float_power(np.pi, 2) * np.float_power(c, 2) * np.float_power(r, 3)
-    d2 = M_star + 4.0 * np.pi * rho * np.float_power(r, 3)
+    n1 = 9.0 * G * M_star ** 2 * M_dot ** 2
+    n2 = rho * p_tot(rho, T) * kappa_simple(rho, T) ** 2
+    d1 = 16.0 * np.pi ** 2 * c ** 2 * r ** 3
+    d2 = M_star + 4.0 * np.pi * rho * r ** 3
     f3 = 3.0 / r
-    f4 = 12.0 * np.pi * rho * np.float_power(r, 2) / d2
+    f4 = 12.0 * np.pi * rho * r ** 2 / d2
     return (n1 / d1) * (n2 / d2) * (f3 + f4)
 
 
 def _df_1_drho(M_star, M_dot, r, rho, T):
     """d(f_1)/drho with fitted opacity."""
-    n1 = 9.0 * G * np.float_power(M_star, 2) * np.float_power(M_dot, 2)
-    n2 = 4.0 * np.pi * np.float_power(r, 3) * rho * np.float_power(kappa_tot(rho, T), 2) * p_tot(rho, T)
-    r3 = np.float_power(r, 3)
-    d1 = 16.0 * np.float_power(np.pi, 2) * np.float_power(c, 2) * r3 * (M_star + 4.0 * np.pi * rho * r3)
+    n1 = 9.0 * G * M_star ** 2 * M_dot ** 2
+    n2 = 4.0 * np.pi * r ** 3 * rho * kappa_tot(rho, T) ** 2 * p_tot(rho, T)
+    r3 = r ** 3
+    d1 = 16.0 * np.pi ** 2 * c ** 2 * r3 * (M_star + 4.0 * np.pi * rho * r3)
     d2 = M_star + 4.0 * np.pi * rho * r3
-    f2 = (p_gas(rho, T) + p_tot(rho, T)) * np.float_power(kappa_tot(rho, T), 2)
+    f2 = (p_gas(rho, T) + p_tot(rho, T)) * kappa_tot(rho, T) ** 2
     f3 = 2.0 * kappa_tot(rho, T) * kappa_tot_drho(rho, T) * rho * p_tot(rho, T)
     f4 = n2 / d2
     return -(n1 / d1) * (f2 + f3 - f4)
@@ -173,12 +169,12 @@ def _df_1_drho(M_star, M_dot, r, rho, T):
 
 def _df_1_drho_old(M_star, M_dot, r, rho, T):
     """d(f_1)/drho with Kramers opacity."""
-    n1 = 9.0 * G * np.float_power(M_star, 2) * np.float_power(M_dot, 2)
-    n2 = 4.0 * np.pi * np.float_power(r, 3) * rho * np.float_power(kappa_simple(rho, T), 2) * p_tot(rho, T)
-    r3 = np.float_power(r, 3)
-    d1 = 16.0 * np.float_power(np.pi, 2) * np.float_power(c, 2) * r3 * (M_star + 4.0 * np.pi * rho * r3)
+    n1 = 9.0 * G * M_star ** 2 * M_dot ** 2
+    n2 = 4.0 * np.pi * r ** 3 * rho * kappa_simple(rho, T) ** 2 * p_tot(rho, T)
+    r3 = r ** 3
+    d1 = 16.0 * np.pi ** 2 * c ** 2 * r3 * (M_star + 4.0 * np.pi * rho * r3)
     d2 = M_star + 4.0 * np.pi * rho * r3
-    f2 = (p_gas(rho, T) + p_tot(rho, T)) * np.float_power(kappa_simple(rho, T), 2)
+    f2 = (p_gas(rho, T) + p_tot(rho, T)) * kappa_simple(rho, T) ** 2
     f3 = 2.0 * kappa_simple(rho, T) * _kappa_simple_drho(rho, T) * rho * p_tot(rho, T)
     f4 = n2 / d2
     return -(n1 / d1) * (f2 + f3 - f4)
@@ -186,22 +182,22 @@ def _df_1_drho_old(M_star, M_dot, r, rho, T):
 
 def _df_2_dr(M_star, M_dot, r, rho, T, alpha_var):
     """d(f_2)/dr."""
-    n1 = 6.0 * np.float_power(G, 2) * np.float_power(M_dot, 2) * M_star * rho
-    n2 = 12.0 * np.pi * rho * np.float_power(p_tot(rho, T), 3) * np.float_power(r, 2)
-    d1 = 16.0 * np.float_power(np.pi, 2) * np.float_power(alpha_var, 2) * np.float_power(r, 7)
-    d2 = M_star + 4.0 * np.pi * rho * np.float_power(r, 3)
-    return -(n1 / d1) + n2 / np.float_power(d2, 2)
+    n1 = 6.0 * G ** 2 * M_dot ** 2 * M_star * rho
+    n2 = 12.0 * np.pi * rho * p_tot(rho, T) ** 3 * r ** 2
+    d1 = 16.0 * np.pi ** 2 * alpha_var ** 2 * r ** 7
+    d2 = M_star + 4.0 * np.pi * rho * r ** 3
+    return -(n1 / d1) + n2 / d2 ** 2
 
 
 def _df_2_drho(M_star, M_dot, r, rho, T, alpha_var):
     """d(f_2)/drho."""
     R_cgs = k_B / m_p
-    n1 = np.float_power(G, 2) * np.float_power(M_dot, 2) * M_star
-    n2 = 3.0 * np.float_power(p_tot(rho, T), 2) * (R_cgs / mu) * T
-    n3 = 4.0 * np.pi * np.float_power(r, 3) * np.float_power(p_tot(rho, T), 3)
-    d1 = 16.0 * np.float_power(np.pi, 2) * np.float_power(alpha_var, 2) * np.float_power(r, 6)
-    d2 = M_star + 4.0 * np.pi * rho * np.float_power(r, 3)
-    return (n1 / d1) - (n2 / d2) + n3 / np.float_power(d2, 2)
+    n1 = G ** 2 * M_dot ** 2 * M_star
+    n2 = 3.0 * p_tot(rho, T) ** 2 * (R_cgs / mu) * T
+    n3 = 4.0 * np.pi * r ** 3 * p_tot(rho, T) ** 3
+    d1 = 16.0 * np.pi ** 2 * alpha_var ** 2 * r ** 6
+    d2 = M_star + 4.0 * np.pi * rho * r ** 3
+    return (n1 / d1) - (n2 / d2) + n3 / d2 ** 2
 
 
 # ---------------------------------------------------------------------------
