@@ -4,8 +4,8 @@ Extracted from diskequations_SS_bath_params.ipynb.
 All functions take explicit physical parameters rather than reading globals.
 """
 
-import numpy as np
 
+from blackhole import get_xp
 from blackhole.constants import M_DOT_CRIT, G, M_sun, c
 
 # ---------------------------------------------------------------------------
@@ -34,7 +34,8 @@ def m_dot_rel(M_dot):
 
 def f_boundary(r, M):
     """Inner boundary correction factor f(r)."""
-    return 1.0 - np.sqrt(3.0 * r_g(M) / r)
+    xp = get_xp(r)
+    return 1.0 - xp.sqrt(3.0 * r_g(M) / r)
 
 
 # ---------------------------------------------------------------------------
@@ -43,12 +44,14 @@ def f_boundary(r, M):
 
 def border_inner_middle(alpha, M, M_dot):
     """r_hat boundary between inner and middle regions."""
-    return 150.0 * np.float_power(alpha * m_rel(M), 2.0 / 21.0) * np.float_power(m_dot_rel(M_dot), 16.0 / 21.0)
+    xp = get_xp(alpha, M_dot)
+    return 150.0 * xp.float_power(alpha * m_rel(M), 2.0 / 21.0) * xp.float_power(m_dot_rel(M_dot), 16.0 / 21.0)
 
 
 def border_middle_outer(M_dot):
     """r_hat boundary between middle and outer regions."""
-    return 6.3e3 * np.float_power(m_dot_rel(M_dot), 2.0 / 3.0)
+    xp = get_xp(M_dot)
+    return 6.3e3 * xp.float_power(m_dot_rel(M_dot), 2.0 / 3.0)
 
 
 # ---------------------------------------------------------------------------

@@ -8,17 +8,13 @@ dependencies = [
     "scipy>=1.14",
     "matplotlib",
     "pandas",
-    "numba",
-    "numba-cuda[cu13]",
-    "cupy-cuda12x",
 ]
 
 [project.optional-dependencies]
-cpu = [
-    "numpy",
-    "scipy>=1.14",
-    "matplotlib",
-    "pandas",
+gpu = [
+    "numba",
+    "numba-cuda[cu13]",
+    "cupy-cuda12x",
 ]
 dev = [
     "pytest",
@@ -38,6 +34,7 @@ select = ["E", "F", "I"]
 
 [tool.ruff.lint.per-file-ignores]
 "*.ipynb" = [
+    "E501",  # Line too long — notebooks have long plotting lines
     "F821",  # Undefined name — variables cross cell boundaries and %run
     "F811",  # Redefined name — notebooks intentionally redefine functions across cells
     "F841",  # Unused variable — notebooks assign intermediates for inspection

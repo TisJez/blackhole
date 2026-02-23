@@ -4,8 +4,8 @@
 
 - **Python 3.12+** ([python.org](https://www.python.org/downloads/))
 - **Git** ([git-scm.com](https://git-scm.com/))
-- **NVIDIA GPU** with up-to-date drivers (for CUDA acceleration)
-- **CUDA Toolkit 13.x** ([developer.nvidia.com/cuda-downloads](https://developer.nvidia.com/cuda-downloads))
+- **NVIDIA GPU** with up-to-date drivers (optional, for CUDA acceleration)
+- **CUDA Toolkit 13.x** ([developer.nvidia.com/cuda-downloads](https://developer.nvidia.com/cuda-downloads)) (optional)
 
 ## Quick Start
 
@@ -37,37 +37,43 @@ source .venv/bin/activate
 
 ### 3. Install dependencies
 
-**With GPU (requires NVIDIA CUDA):**
+**CPU-only (dev/CI):**
 
 ```bash
 pip install -e ".[dev]"
 ```
 
 This installs:
-- **Core**: numpy, scipy, matplotlib, pandas, numba, numba-cuda, cupy-cuda12x
+- **Core**: numpy, scipy, matplotlib, pandas
 - **Dev**: pytest, jupyter, ruff
 
-**Without GPU (CPU-only dev/CI):**
+**With GPU (requires NVIDIA CUDA):**
 
 ```bash
-pip install -e ".[cpu,dev]"
+pip install -e ".[gpu,dev]"
 ```
 
-This installs only the CPU-compatible packages (numpy, scipy, matplotlib, pandas, pytest, jupyter, ruff).
+This additionally installs: numba, numba-cuda, cupy-cuda12x
 
 ### 4. Verify the installation
 
 ```bash
-# CPU-only verification
+# CPU verification
 python -c "from blackhole.constants import G; print('Package OK, G =', G)"
 
-# Full GPU verification
-python -c "import numpy, scipy, matplotlib, pandas, numba, cupy; print('All packages OK')"
+# Run tests
+pytest                     # 172 tests
+
+# Lint
+ruff check .
+
+# GPU verification (optional)
+python -c "import cupy as cp; print('CuPy version:', cp.__version__)"
 ```
 
 ## CUDA / GPU Setup
 
-GPU acceleration is used for the time-dependent disk simulations. This requires an NVIDIA GPU with the CUDA Toolkit installed.
+GPU acceleration is optional. The package works fully on CPU. GPU support is provided via CuPy (array dispatch) and Numba CUDA (JIT compilation).
 
 ### Check your GPU
 
@@ -83,35 +89,12 @@ This should show your GPU model, driver version, and supported CUDA version.
 2. Select your OS and architecture
 3. Download and run the installer
 
-The Python CUDA libraries (`numba-cuda`, `nvidia-nvvm`, etc.) are installed automatically via pip as part of the `numba-cuda[cu13]` dependency. No separate Python-side CUDA setup is needed.
+The Python CUDA libraries (`numba-cuda`, `nvidia-nvvm`, etc.) are installed automatically via pip as part of the `numba-cuda[cu13]` dependency.
 
 ### Verify CUDA
 
 ```bash
 python -c "from numba import cuda; print('CUDA available:', cuda.is_available()); cuda.detect()"
-```
-
-Expected output should list your GPU and show `[SUPPORTED]`.
-
-### Test a CUDA kernel
-
-```python
-from numba import cuda
-import numpy as np
-
-@cuda.jit
-def add_kernel(x, y, out):
-    i = cuda.grid(1)
-    if i < out.size:
-        out[i] = x[i] + y[i]
-
-n = 1000
-x = np.ones(n, dtype=np.float32)
-y = np.ones(n, dtype=np.float32)
-out = np.zeros(n, dtype=np.float32)
-
-add_kernel[1, n](x, y, out)
-print(out)  # should print array of 2.0s
 ```
 
 ### Verify CuPy
@@ -120,84 +103,68 @@ print(out)  # should print array of 2.0s
 python -c "import cupy as cp; print('CuPy version:', cp.__version__); print('CUDA runtime:', cp.cuda.runtime.runtimeGetVersion())"
 ```
 
-Expected output should show the CuPy version and CUDA runtime version number.
-
 ### Note on numba-cuda
 
 The CUDA support in Numba is provided by the separate `numba-cuda` package (maintained by NVIDIA), not the old built-in `numba.cuda`. The import path is still `from numba import cuda` -- `numba-cuda` patches itself into the Numba namespace automatically.
 
-## Running Without an NVIDIA GPU
+## CuPy/NumPy Array Dispatch
 
-The project is designed for NVIDIA GPUs, but can be adapted to run on CPU-only machines.
-
-### 1. Install without GPU packages
-
-Skip the GPU-specific dependencies (`numba-cuda`, `cupy-cuda12x`) by installing manually:
-
-```bash
-pip install numpy scipy matplotlib pandas numba
-pip install -e ".[dev]" --no-deps
-```
-
-Or install everything and just ignore the GPU packages that fail — `pip install -e ".[dev]"` will still install the CPU-compatible packages even if `cupy-cuda12x` errors out.
-
-### 2. Adapt imports in notebooks
-
-In each notebook, replace the CuPy import with a NumPy-backed shim so that all `cp.*` calls fall back to NumPy on CPU:
+All physics modules support transparent GPU acceleration via `get_xp()` in `blackhole/__init__.py`. When you pass CuPy arrays to any function, it automatically uses CuPy operations. When you pass NumPy arrays, it uses NumPy. No code changes needed:
 
 ```python
-try:
-    import cupy as cp
-except ImportError:
-    import numpy as cp
-    cp.asnumpy = lambda x: x  # no-op since arrays are already NumPy
+import numpy as np
+from blackhole.opacity import kappa_e
+
+# CPU path (NumPy)
+T = np.array([1e4, 1e5, 1e6])
+result = kappa_e(T)  # uses numpy internally
+
+# GPU path (CuPy) — same function, same call
+import cupy as cp
+T_gpu = cp.array([1e4, 1e5, 1e6])
+result_gpu = kappa_e(T_gpu)  # uses cupy internally
 ```
-
-Place this right after `import numpy as np` in each notebook's first cell.
-
-### 3. Numba JIT functions
-
-The `@jit(target_backend='cuda')` functions in `GPU_timedep*.ipynb` will not work without a CUDA GPU. To run those notebooks on CPU, change the decorator to plain `@jit(nopython=True)`:
-
-```python
-# GPU version (requires NVIDIA GPU)
-@jit(target_backend='cuda', nopython=True)
-def my_func(...):
-
-# CPU-only version
-@jit(nopython=True)
-def my_func(...):
-```
-
-### 4. Which notebooks work on CPU
-
-| Notebook | CPU-only? | Notes |
-|----------|-----------|-------|
-| `opacity_formulae.ipynb` | Yes | Only needs the CuPy import shim |
-| `diskequations_SS_bath_params.ipynb` | Yes | Only needs the CuPy import shim |
-| `diskeqs_ss_2.ipynb` | Yes | Only needs the CuPy import shim |
-| `alpha-t dependence.ipynb` | Yes | Only needs the CuPy import shim |
-| `bh_model_comparison_graphs.ipynb` | Yes | Only needs the CuPy import shim |
-| `Outburst_graphs.ipynb` | Yes | Only needs the CuPy import shim (loads pre-computed CSV data) |
-| `GPU_timedep*.ipynb` | Partial | Needs both the CuPy import shim **and** JIT decorator changes. Will run but significantly slower without GPU acceleration. |
 
 ## Running Notebooks
+
+### From the command line
 
 ```bash
 jupyter notebook src/notebooks/
 ```
 
-## Linting
+### From IntelliJ / PyCharm
 
-```bash
-ruff check .
-```
+1. Install the **Jupyter** plugin (Settings > Plugins)
+2. Open any `.ipynb` file — it opens in the built-in Jupyter editor
+3. Select your Python interpreter (the `.venv` you created) from the kernel dropdown
+4. Run cells with Shift+Enter
+
+### Notebook execution order
+
+The simulation notebooks are independent — each initializes a fresh disk. Run any simulation notebook to generate its CSV data files, then run a visualization notebook to plot the results.
+
+**Typical workflow:**
+
+1. Run a simulation notebook (e.g., `sgr_a_timedep_simulation.ipynb`) — generates CSV files in `src/data/`
+2. Run a plotting notebook (e.g., `sgr_a_outburst_plots.ipynb`) — reads the CSVs and produces plots
+3. Steady-state notebooks (`opacity_constants`, `viscosity_temperature_dependence`, etc.) are self-contained and can be run independently
 
 ## Running Tests
 
 ```bash
-pytest                # Run all 119 tests
-pytest tests/ -v      # Verbose output
+pytest                    # Run all 172 tests
+pytest tests/ -v          # Verbose output
+pytest -k "test_opacity"  # Run specific tests by name
+```
+
+Tests marked `@requires_cupy` are automatically skipped on machines without CuPy installed.
+
+## Linting
+
+```bash
+ruff check .              # Check for errors
+ruff check --fix .        # Auto-fix import sorting etc.
 ```
 
 ## Project Structure
@@ -205,23 +172,41 @@ pytest tests/ -v      # Verbose output
 ```
 blackhole/
 ├── pyproject.toml
+├── README.md
+├── SETUP.md
+├── CLAUDE.md
 ├── src/
-│   ├── blackhole/          # Python package (installable via pip)
-│   │   ├── __init__.py     # gpu_jit decorator (CUDA → CPU numba → passthrough)
-│   │   ├── constants.py    # CGS physical constants
-│   │   ├── opacity.py      # Opacity regimes
-│   │   ├── viscosity.py    # Temperature-dependent alpha viscosity
-│   │   ├── steady_state.py # Shakura-Sunyaev steady-state disk structure
-│   │   ├── disk_physics.py # Core disk physics
-│   │   ├── irradiation.py  # Irradiation feedback
-│   │   ├── evolution.py    # Surface density time-stepping
-│   │   ├── solvers.py      # Newton solvers (temperature & scale height)
-│   │   └── luminosity.py   # Radiative luminosity & effective temperature
-│   ├── notebooks/          # Jupyter notebooks (simulations & analysis)
-│   ├── graphs/             # Output plots from notebooks
-│   └── data/               # CSV simulation data (git-ignored)
-├── tests/                  # Unit tests (119 tests)
-└── .github/workflows/      # CI/CD pipelines
+│   ├── blackhole/                              # Python package
+│   │   ├── __init__.py                         # gpu_jit, get_xp()
+│   │   ├── constants.py                        # CGS physical constants
+│   │   ├── opacity.py                          # Opacity regimes
+│   │   ├── viscosity.py                        # Alpha viscosity
+│   │   ├── steady_state.py                     # SS73 steady-state
+│   │   ├── disk_physics.py                     # Core disk physics
+│   │   ├── irradiation.py                      # Irradiation feedback
+│   │   ├── evolution.py                        # Time-stepping
+│   │   ├── solvers.py                          # Newton solvers
+│   │   ├── luminosity.py                       # Luminosity & T_eff
+│   │   └── cr_solvers.py                       # CR steady-state
+│   ├── notebooks/                              # Jupyter notebooks
+│   │   ├── opacity_constants.ipynb             # Opacity regimes
+│   │   ├── viscosity_temperature_dependence.ipynb  # Alpha-T model
+│   │   ├── steady_state_disk_structure.ipynb   # SS73 disk structure
+│   │   ├── steady_state_disk_subplots.ipynb    # SS73 subplots
+│   │   ├── opacity_model_comparison.ipynb      # SS73 vs CR comparison
+│   │   ├── wd_timedep_simulation.ipynb         # White dwarf sim
+│   │   ├── bh_timedep_simulation.ipynb         # BH base sim
+│   │   ├── bh_noeffects_timedep_simulation.ipynb   # BH no-effects sim
+│   │   ├── bh_irradiation_timedep_simulation.ipynb # BH irradiation sim
+│   │   ├── bh_evaporation_timedep_simulation.ipynb # BH evaporation sim
+│   │   ├── bh_iradevap_timedep_simulation.ipynb    # BH irrad+evap sim
+│   │   ├── sgr_a_timedep_simulation.ipynb      # Sgr A* SMBH sim
+│   │   ├── outburst_lightcurves.ipynb          # Multi-model plots
+│   │   └── sgr_a_outburst_plots.ipynb          # Sgr A* plots
+│   ├── graphs/                                 # Output plots
+│   └── data/                                   # CSV data (git-ignored)
+├── tests/                                      # 172 unit tests
+└── .github/workflows/                          # CI/CD
 ```
 
 ## Git Workflow

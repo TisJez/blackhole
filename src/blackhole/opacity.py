@@ -4,8 +4,8 @@ Extracted from opacity_formulae.ipynb and GPU_timedep notebooks.
 All functions accept scalars or numpy arrays.
 """
 
-import numpy as np
 
+from blackhole import get_xp
 from blackhole.constants import X_HYDROGEN, Z_METALS, Z_STAR
 
 # ---------------------------------------------------------------------------
@@ -14,22 +14,25 @@ from blackhole.constants import X_HYDROGEN, Z_METALS, Z_STAR
 
 def kappa_e(rho, T, X=X_HYDROGEN):
     """Electron scattering opacity with relativistic + degeneracy corrections."""
-    a = 0.2 * (1 + X) * (1.0 / (1.0 + 2.7e11 * (rho / np.float_power(T, 2))))
-    b = 1.0 / (1.0 + np.float_power(T / 4.5e8, 0.86))
+    xp = get_xp(rho, T)
+    a = 0.2 * (1 + X) * (1.0 / (1.0 + 2.7e11 * (rho / xp.float_power(T, 2))))
+    b = 1.0 / (1.0 + xp.float_power(T / 4.5e8, 0.86))
     return a * b
 
 
 def kappa_K(rho, T, X=X_HYDROGEN, Z=Z_METALS):
     """Kramers (bound-free + free-free) opacity."""
+    xp = get_xp(rho, T)
     a = 4e25 * (1 + X) * (Z + 0.001)
-    b = rho / np.float_power(T, 3.5)
+    b = rho / xp.float_power(T, 3.5)
     return a * b
 
 
 def kappa_Hminus(rho, T, Z=Z_METALS):
     """H-minus opacity."""
-    a = 1.1e-25 * np.sqrt(Z * rho)
-    b = np.float_power(T, 7.7)
+    xp = get_xp(rho, T)
+    a = 1.1e-25 * xp.sqrt(Z * rho)
+    b = xp.float_power(T, 7.7)
     return a * b
 
 
@@ -51,9 +54,10 @@ def kappa_rad(rho, T, X=X_HYDROGEN, Z=Z_METALS):
 
 def kappa_cond(rho, T, Z_s=Z_STAR):
     """Conductive opacity."""
+    xp = get_xp(rho, T)
     a = 2.6e-7 * Z_s
-    b = np.float_power(T, 2) / np.float_power(rho, 2)
-    c = 1.0 + np.float_power(rho / 2e6, 2.0 / 3.0)
+    b = xp.float_power(T, 2) / xp.float_power(rho, 2)
+    c = 1.0 + xp.float_power(rho / 2e6, 2.0 / 3.0)
     return a * b * c
 
 
@@ -70,17 +74,20 @@ def kappa_tot(rho, T, X=X_HYDROGEN, Z=Z_METALS, Z_s=Z_STAR):
 
 def kappa_ff(rho, T, kappa_0=6.4e22):
     """Free-free (Kramers) opacity only."""
-    return kappa_0 * rho * np.float_power(T, -3.5)
+    xp = get_xp(rho, T)
+    return kappa_0 * rho * xp.float_power(T, -3.5)
 
 
 def kappa_simple(rho, T, kappa_es=0.4, kappa_0=6.4e22):
     """Simple electron-scattering + Kramers opacity."""
-    return kappa_es + kappa_0 * rho * np.float_power(T, -3.5)
+    xp = get_xp(rho, T)
+    return kappa_es + kappa_0 * rho * xp.float_power(T, -3.5)
 
 
 def kappa_bf(rho, T, kappa_es=0.4, kappa_bf0=5e24):
     """Bound-free + electron-scattering opacity."""
-    return kappa_es + kappa_bf0 * rho * np.float_power(T, -3.5)
+    xp = get_xp(rho, T)
+    return kappa_es + kappa_bf0 * rho * xp.float_power(T, -3.5)
 
 
 # ---------------------------------------------------------------------------
