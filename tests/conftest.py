@@ -5,6 +5,14 @@ import pytest
 
 from blackhole.constants import M_sun
 
+try:
+    import cupy  # noqa: F401
+    HAS_CUPY = True
+except ImportError:
+    HAS_CUPY = False
+
+requires_cupy = pytest.mark.skipif(not HAS_CUPY, reason="CuPy not installed")
+
 
 @pytest.fixture
 def ten_solar_mass():
