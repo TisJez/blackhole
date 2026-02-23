@@ -26,7 +26,7 @@ blackhole/
 │   ├── notebooks/           # Jupyter notebooks (simulations & analysis)
 │   ├── graphs/              # Output plots from notebooks
 │   └── data/                # CSV simulation data (git-ignored)
-├── tests/                   # Unit tests (172 tests)
+├── tests/                   # Unit tests (211 tests)
 └── .github/workflows/       # CI/CD pipelines
 ```
 
@@ -51,7 +51,7 @@ pip install -e ".[gpu,dev]"      # Also installs GPU deps (CuPy, Numba CUDA — 
 ### Verify
 
 ```bash
-pytest                           # 172 tests
+pytest                           # 211 tests
 ruff check .                     # Lint
 ```
 
@@ -66,6 +66,7 @@ jupyter notebook src/notebooks/parameter_evaluation.ipynb
 Edit the parameter cell (M_star, R_K, R_N, M_dot, dt_mult, etc.), run all cells, and check for **PASS**. The notebook will:
 - Verify mass deposition won't be silently skipped (dt constraint)
 - Verify the disk is unstable enough to outburst (DIM criterion)
+- Check whether the thermal timescale is resolved (advisory — flags need for adaptive dt)
 - Compare your config against all 7 reference simulations
 - Sweep dt_mult and M_dot to show the safe parameter ranges
 
@@ -95,7 +96,7 @@ When numba is not installed, `@cpu_jit` falls back to a transparent passthrough 
 | `solvers` | Newton-method solvers for energy balance (midplane temperature) and hydrostatic equilibrium (scale height) | Root fns |
 | `luminosity` | Radiative luminosity diagnostics (total and per-annulus) and effective temperature profiles | No |
 | `cr_solvers` | Critical-regime steady-state disk structure: radiation pressure, Keplerian omega, scale height, coupled rho-T solver via Levenberg-Marquardt | No |
-| `parameter_evaluation` | Pre-flight parameter checks: mass deposition constraint and DIM instability criterion | No |
+| `parameter_evaluation` | Pre-flight parameter checks: mass deposition constraint, DIM instability criterion, and thermal resolution advisory | No |
 
 ## Notebooks
 
@@ -105,7 +106,7 @@ The recommended workflow is: **(1) evaluate parameters** → **(2) run simulatio
 
 | Notebook | Description |
 |----------|-------------|
-| `parameter_evaluation` | **Start here.** Interactive pre-flight checks for your simulation parameters. Edit M_star, R_K, R_N, M_dot, and dt_mult, then run to verify mass deposition and DIM instability constraints. Includes a comparison table of all 7 reference configurations and parameter sensitivity sweeps (dt_mult and M_dot) with plots. |
+| `parameter_evaluation` | **Start here.** Interactive pre-flight checks for your simulation parameters. Edit M_star, R_K, R_N, M_dot, and dt_mult, then run to verify mass deposition, DIM instability, and thermal resolution constraints. Includes a comparison table of all 7 reference configurations and parameter sensitivity sweeps (dt_mult and M_dot) with plots. |
 
 ### Steady-State Analysis
 
@@ -128,10 +129,10 @@ Each notebook runs a full disk instability simulation from a fresh initial disk.
 | `wd_timedep_simulation` | White dwarf | 1 M_sun | 5e8 | 8e10 | 5e16 | No | No | `_wd` | 10x | 1,000,001 |
 | `bh_timedep_simulation` | BH base | 9 M_sun | 5e8 | 4.2e11 | 3e17 | No | No | `_bh` | 30x | 1,500,001 |
 | `bh_noeffects_timedep_simulation` | BH (9 M_sun) | 9 M_sun | 5e8 | 4.2e11 | 1e17 | No | No | `_bhne` | 30x | 1,500,001 |
-| `bh_irradiation_timedep_simulation` | BH (9 M_sun) | 9 M_sun | 5e8 | 4.2e11 | 1e17 | Yes | No | `_ir` | 20–30x | 500,001 |
-| `bh_evaporation_timedep_simulation` | BH (9 M_sun) | 9 M_sun | 5e8 | 4.2e11 | 1e17 | No | Yes | `_ev` | 30–100x | 500,001 |
-| `bh_iradevap_timedep_simulation` | BH (9 M_sun) | 9 M_sun | 5e8 | 4.2e11 | 1e17 | Yes | Yes | `_irev` | 30x | 500,001 |
-| `sgr_a_timedep_simulation` | Sgr A* SMBH | 4.3e6 M_sun | 4e12 | 2e15 | 1e22 | Yes | Yes | _(none)_ | 10–300x (clamped) | 500,001 |
+| `bh_irradiation_timedep_simulation` | BH (9 M_sun) | 9 M_sun | 5e8 | 4.2e11 | 1e17 | Yes | No | `_ir` | 20–30x | 500,001   |
+| `bh_evaporation_timedep_simulation` | BH (9 M_sun) | 9 M_sun | 5e8 | 4.2e11 | 1e17 | No | Yes | `_ev` | 30–100x | 100,001   |
+| `bh_iradevap_timedep_simulation` | BH (9 M_sun) | 9 M_sun | 5e8 | 4.2e11 | 1e17 | Yes | Yes | `_irev` | 30x | 500,001   |
+| `sgr_a_timedep_simulation` | Sgr A* SMBH | 4.3e6 M_sun | 4e12 | 2e15 | 1e22 | Yes | Yes | _(none)_ | 10–300x (clamped) | 250,001   |
 
 Each simulation saves 6 CSV files to `src/data/`:
 - `Sigma_history_bath_array{suffix}.csv` - Surface density snapshots
@@ -164,7 +165,7 @@ The codebase implements the Disk Instability Model (DIM) for accretion disks aro
 2. **Alpha viscosity** - The Shakura-Sunyaev alpha prescription (Shakura & Sunyaev 1973) with a smooth temperature-dependent transition between cold (alpha ~ 0.04) and hot (alpha ~ 0.2) states (Hameury et al. 1998), creating the thermal-viscous instability
 3. **Time-dependent evolution** - Viscous diffusion of surface density on a 1D radial grid (X = 2*sqrt(R) coordinates; Pringle 1981), with mass addition at the transfer radius (Lubow & Shu 1975), tidal torques from the companion (Papaloizou & Pringle 1977), and optional disk evaporation (Meyer & Meyer-Hofmeister 1994)
 4. **Irradiation** - X-ray heating from the inner disk (Dubus et al. 1999) modifies the critical surface densities (Lasota et al. 2008) and temperatures for the hot/cold transition, stabilizing the outer disk
-5. **Evaporation** - Removal of mass from the inner disk due to coronal evaporation, scaled by the ratio of accretion luminosity to Eddington luminosity (Liu et al. 2002)
+5. **Evaporation** - Removal of mass from the inner disk due to coronal evaporation, scaled by the ratio of accretion luminosity to Eddington luminosity (Liu et al. 1999)
 
 Physical units are CGS throughout the codebase.
 
@@ -226,7 +227,7 @@ The viscous diffusion step in `evolve_surface_density` supports both explicit an
 
 All time-dependent simulation notebooks use **Crank-Nicolson (`theta=0.5`)** with timestep multipliers (10x for WD, 20–30x for BH, 10–300x for Sgr A* clamped to dt_max) to cover sufficient physical time for outburst cycles. The implicit scheme solves a tridiagonal system via `scipy.linalg.solve_banded` at O(N) cost per timestep — the same computational cost as the explicit scheme — while allowing timesteps well beyond the CFL stability limit.
 
-Tidal torques and evaporation are applied as explicit operator-split source terms after the implicit diffusion step, as they are small corrections that do not drive the CFL constraint.
+Tidal torques and evaporation are applied as explicit operator-split source terms after the implicit diffusion step, as they are small corrections that do not drive the CFL constraint. The BH evaporation and Sgr A* simulations additionally employ an **adaptive thermal-timescale constraint** that reduces `dt` during outbursts to resolve the alpha transition (see Thermal Timescale Constraint).
 
 ### Mass Deposition Constraint
 
@@ -324,7 +325,8 @@ This constraint is only active when the disk contains hot cells (alpha > 2 * alp
 |------------|----------|-----------------|---------------|---------------------|-------------|-----------|
 | WD | 2.1e10 | 2.2e-3 | 2.3e3 | 4.5e4 | ~8.4e3 | Yes |
 | BH (9 M_sun) | 2.2e11 | 3.4e-4 | 1.5e4 | 3.0e5 | ~1.1e4 | Yes |
-| Sgr A* | 1e15 | 7.6e-7 | 6.6e6 | 1.3e8 | 2e9 (cap) | No — needs adaptive dt |
+| BH evap (9 M_sun) | 2.2e11 | 3.4e-4 | 1.5e4 | 3.0e5 | ~1.6e5 (100x CFL) | No — uses adaptive dt |
+| Sgr A* | 1e15 | 7.6e-7 | 6.6e6 | 1.3e8 | 2e9 (cap) | No — uses adaptive dt |
 
 The parameter evaluation tool reports `thermal_resolution_ok` and `thermal_margin` to flag configurations that require adaptive timestep control.
 
@@ -354,8 +356,8 @@ Branch strategy: `feature` → `dev` → `main`
 - Frank, J., King, A. & Raine, D. (2002). *Accretion Power in Astrophysics*, 3rd ed. Cambridge University Press. — General accretion disk theory
 - Hameury, J.-M., Menou, K., Dubus, G., Lasota, J.-P. & Hure, J.-M. (1998). "Accretion disc outbursts: a new version of an old model." *MNRAS*, 298, 1048. — Temperature-dependent alpha viscosity (`viscosity.py`)
 - Lasota, J.-P. (2001). "The disc instability model of dwarf novae and low-mass X-ray binary transients." *New Astron. Rev.*, 45, 449. — Overall DIM framework
-- Lasota, J.-P., Dubus, G. & Kruk, K. (2008). "Stability of accretion discs in ultraluminous X-ray sources." *A&A*, 486, 523. — Critical surface densities Sigma_max/min (`irradiation.py`)
-- Liu, B.F., Meyer, F., Meyer-Hofmeister, E. (2002). "Evaporation of black hole accretion disks: the disk-corona transition and the connection to the advection-dominated accretion flow." *A&A*, 392, 135. — Luminosity-scaled evaporation (`evolution.py`, L_ratio)
+- Lasota, J.-P., Dubus, G. & Kruk, K. (2008). "Stability of helium accretion discs in ultracompact binaries." *A&A*, 486, 523. — Critical surface densities Sigma_max/min (`irradiation.py`)
+- Liu, B.F., Yuan, W., Meyer, F., Meyer-Hofmeister, E. & Xie, G.Z. (1999). "Evaporation of Accretion Disks around Black Holes: The Disk-Corona Transition and the Connection to the Advection-dominated Accretion Flow." *ApJ*, 527, L17. — Luminosity-scaled evaporation (`evolution.py`, L_ratio)
 - Lubow, S.H. & Shu, F.H. (1975). "Gas dynamics of semidetached binaries." *ApJ*, 198, 383. — Mass transfer and circularisation (`evolution.py`)
 - Meyer, F. & Meyer-Hofmeister, E. (1994). "Accretion disk evaporation by a coronal siphon flow." *A&A*, 288, 175. — Disk evaporation model (`evolution.py`)
 - Papaloizou, J. & Pringle, J.E. (1977). "Tidal torques on accretion discs in close binary systems." *MNRAS*, 181, 441. — Tidal torques (`evolution.py`)
