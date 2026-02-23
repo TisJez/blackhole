@@ -194,7 +194,8 @@ blackhole/
 ├── .gitignore
 ├── src/
 │   ├── notebooks/          # Jupyter notebooks (simulations & analysis)
-│   └── images/             # Output plots from notebooks
+│   ├── graphs/             # Output plots from notebooks
+│   └── data/               # CSV simulation data (git-ignored)
 ├── tests/                  # Test directory
 └── .github/workflows/      # CI/CD pipelines
 ```

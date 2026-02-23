@@ -10,4 +10,7 @@ __pycache__/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Simulation data
+src/data/*.csv
 CLAUDE.md
