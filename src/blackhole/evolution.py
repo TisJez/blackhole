@@ -8,6 +8,7 @@ import dataclasses
 
 import numpy as np
 
+from blackhole import get_xp
 from blackhole.constants import G, c
 from blackhole.disk_physics import Marr, R_func, S_factor, Sigma_from_S
 
@@ -51,7 +52,8 @@ def calculate_timestep(X, nu, dX):
     float
         Stable timestep (s).
     """
-    max_nu = float(np.max(nu))
+    xp = get_xp(X, nu)
+    max_nu = float(xp.max(nu))
     return 0.5 * float(X[0]) ** 2 * dX ** 2 / (12.0 * max_nu)
 
 
@@ -112,6 +114,7 @@ def add_mass(Sigma, M_dot, dt, X, N, X_K, X_N, dX, min_Sigma):
     MassTransferResult
         Updated Sigma and mass-transfer bookkeeping values.
     """
+    xp = get_xp(Sigma, X)
     dM = M_dot * dt
     X_K_dM = dM * X_K
 
@@ -129,8 +132,8 @@ def add_mass(Sigma, M_dot, dt, X, N, X_K, X_N, dX, min_Sigma):
         massarr = Mass[j:]
         xmassarr = X[j:] * Mass[j:]
 
-        sum_dM_i = float(np.sum(massarr))
-        X_sum_dM_i = float(np.sum(xmassarr))
+        sum_dM_i = float(xp.sum(massarr))
+        X_sum_dM_i = float(xp.sum(xmassarr))
 
         D_J = (X_K_dM + X_sum_dM_i) / (dM + sum_dM_i)
 
@@ -138,8 +141,8 @@ def add_mass(Sigma, M_dot, dt, X, N, X_K, X_N, dX, min_Sigma):
             dM_J = ((X[j] - D_J) / dX) * (dM + sum_dM_i)
             dM_J_minus_1 = ((D_J - X[j - 1]) / dX) * (dM + sum_dM_i) + Mass[j - 1]
 
-            Sj = 4.0 * dM_J / (np.pi * X[j] ** 2 * dX)
-            Sj1 = 4.0 * dM_J_minus_1 / (np.pi * X[j - 1] ** 2 * dX)
+            Sj = 4.0 * dM_J / (xp.pi * X[j] ** 2 * dX)
+            Sj1 = 4.0 * dM_J_minus_1 / (xp.pi * X[j - 1] ** 2 * dX)
 
             sjx = Sj / X[j + 1] if j + 1 < N else Sj / X[j]
             sj1x = Sj1 / X[j]
@@ -194,6 +197,7 @@ def evolve_surface_density(Sigma, dt, nu, X, dX, N, min_Sigma,
     np.ndarray
         Updated surface density array.
     """
+    xp = get_xp(Sigma, nu, X)
     S_arr = S_factor(X, Sigma)
     new_S = S_arr.copy()
 
@@ -222,7 +226,7 @@ def evolve_surface_density(Sigma, dt, nu, X, dX, N, min_Sigma,
             cw * r[1:-1] * nu[1:-1] * new_Sigma[1:-1]
             * (r[1:-1] / a_1) ** n_1
         )
-        tidal_torque = dt / (2.0 * np.pi * r[1:-1]) * T_tid
+        tidal_torque = dt / (2.0 * xp.pi * r[1:-1]) * T_tid
 
         if trunc_rad < len(tidal_torque):
             new_Sigma[1 + trunc_rad:-1] -= tidal_torque[trunc_rad:]
@@ -230,7 +234,7 @@ def evolve_surface_density(Sigma, dt, nu, X, dX, N, min_Sigma,
     # Evaporation
     if evap_func is not None:
         M_ev = evap_func(r[1:-1])
-        new_Sigma[1:-1] -= M_ev * dt / (2.0 * np.pi * r[1:-1])
+        new_Sigma[1:-1] -= M_ev * dt / (2.0 * xp.pi * r[1:-1])
 
-    new_Sigma = np.maximum(new_Sigma, min_Sigma)
+    new_Sigma = xp.maximum(new_Sigma, min_Sigma)
     return new_Sigma

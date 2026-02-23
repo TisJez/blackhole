@@ -4,9 +4,9 @@ Extracted from the GPU_timedep notebook. Functions that referenced globals
 (M_star, opacity, etc.) now take them as explicit parameters.
 """
 
-import numpy as np
 from scipy.optimize import newton
 
+from blackhole import get_xp
 from blackhole.constants import G, a_rad, c
 from blackhole.disk_physics import (
     kinematic_viscosity,
@@ -170,8 +170,9 @@ def solve_temperature(H, Sigma, r, T_c, alpha, M_star,
     np.ndarray
         Updated temperature array (does not mutate input).
     """
+    xp = get_xp(H, Sigma, r, T_c)
     T_new = T_c.copy()
-    alpha_arr = np.broadcast_to(alpha, Sigma.shape)
+    alpha_arr = xp.broadcast_to(alpha, Sigma.shape)
     T_min_limit = 1e0
     T_max_limit = 2e10
     initial_guesses = [1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6]
@@ -293,9 +294,10 @@ def Y_energy(R, j_val, dMj, dMj1, M_star, M_dot):
     tuple of float
         ``(Y_jminus1, Y_j)`` — energy generation rates at cells j-1 and j.
     """
+    xp = get_xp(R)
     fact1 = (
         G * M_star * M_dot
-        / (2.0 * np.pi * R[j_val - 1] ** 2
+        / (2.0 * xp.pi * R[j_val - 1] ** 2
            * (R[j_val - 1] - R[j_val - 2]))
     )
     fact2 = dMj1 / (dMj1 + dMj)
@@ -303,7 +305,7 @@ def Y_energy(R, j_val, dMj, dMj1, M_star, M_dot):
 
     fact3 = (
         G * M_star * M_dot
-        / (2.0 * np.pi * R[j_val] ** 2
+        / (2.0 * xp.pi * R[j_val] ** 2
            * (R[j_val] - R[j_val - 1]))
     )
     fact4 = dMj / (dMj1 + dMj)

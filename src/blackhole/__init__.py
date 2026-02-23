@@ -2,6 +2,20 @@
 
 import functools
 
+import numpy
+
+
+def get_xp(*args):
+    """Return cupy if any arg is a CuPy array, else numpy."""
+    try:
+        import cupy
+        for a in args:
+            if isinstance(a, cupy.ndarray):
+                return cupy
+    except ImportError:
+        pass
+    return numpy
+
 
 def gpu_jit(func=None, **kwargs):
     """Decorator that selects CUDA JIT, CPU JIT, or passthrough.
