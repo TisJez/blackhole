@@ -10,23 +10,37 @@ Written for the Durham University 2024 MPhys Master's Project by Jezreel Penulia
 blackhole/
 ├── pyproject.toml
 ├── src/
-│   ├── blackhole/           # Python package (installable via pip)
-│   │   ├── __init__.py      # cpu_jit / gpu_jit decorators (numba JIT with fallback)
-│   │   ├── constants.py     # CGS physical constants
-│   │   ├── opacity.py       # Opacity regimes (electron, Kramers, H-, conduction) — JIT'd
-│   │   ├── viscosity.py     # Temperature-dependent alpha viscosity — JIT'd
-│   │   ├── steady_state.py  # Shakura-Sunyaev steady-state disk structure — JIT'd
-│   │   ├── disk_physics.py  # Core disk physics (pressure, density, scale height) — JIT'd
-│   │   ├── irradiation.py   # Irradiation feedback (Flux_irr, Sigma_max/min)
-│   │   ├── evolution.py     # Surface density time-stepping & mass addition
-│   │   ├── solvers.py       # Newton solvers for temperature & scale height (JIT'd root functions)
-│   │   ├── luminosity.py    # Radiative luminosity & effective temperature
-│   │   ├── cr_solvers.py    # Critical-regime (CR) steady-state disk solvers
-│   │   └── parameter_evaluation.py  # Pre-flight parameter checks for DIM simulations
-│   ├── notebooks/           # Jupyter notebooks (simulations & analysis)
-│   ├── graphs/              # Output plots from notebooks
-│   └── data/                # CSV simulation data (git-ignored)
-├── tests/                   # Unit tests (211 tests)
+│   └── blackhole/           # Python package (installable via pip)
+│       ├── __init__.py      # cpu_jit / gpu_jit decorators (numba JIT with fallback)
+│       ├── constants.py     # CGS physical constants
+│       ├── opacity.py       # Opacity regimes (electron, Kramers, H-, conduction) — JIT'd
+│       ├── viscosity.py     # Temperature-dependent alpha viscosity — JIT'd
+│       ├── steady_state.py  # Shakura-Sunyaev steady-state disk structure — JIT'd
+│       ├── disk_physics.py  # Core disk physics (pressure, density, scale height) — JIT'd
+│       ├── irradiation.py   # Irradiation feedback (Flux_irr, Sigma_max/min)
+│       ├── evolution.py     # Surface density time-stepping & mass addition
+│       ├── solvers.py       # Newton solvers for temperature & scale height (JIT'd root functions)
+│       ├── luminosity.py    # Radiative luminosity & effective temperature
+│       ├── cr_solvers.py    # Critical-regime (CR) steady-state disk solvers
+│       ├── parameter_evaluation.py  # Pre-flight parameter checks for DIM simulations
+│       └── gpu/             # GPU-accelerated subpackage (pure NumPy/CuPy, no JIT)
+│           ├── __init__.py  # Array dispatch: get_xp(), to_device(), to_host(); Windows NVIDIA DLL registration
+│           ├── opacity.py   # Vectorized opacity functions
+│           ├── disk_physics.py  # Vectorized disk physics
+│           ├── viscosity.py # Vectorized alpha viscosity
+│           ├── solvers.py   # Fused temperature RawKernel; analytical quadratic scale height; batched secant CPU fallback
+│           ├── evolution.py # Vectorized evolution (CFL, diffusion, evaporation); Thomas algorithm CUDA RawKernel
+│           ├── luminosity.py # Vectorized luminosity & T_eff
+│           ├── perf_logger.py # Per-stage wall-clock profiler with GPU sync barriers
+│           └── simulation.py # GPU simulation orchestrator (SimulationConfig + run_simulation)
+├── notebooks/               # Jupyter notebooks
+│   ├── steady_state/        # Equilibrium disk analysis (5)
+│   ├── simulations/         # Time-dependent simulations (10)
+│   ├── visualization/       # Outburst plots & lightcurves (11)
+│   └── tools/               # Utility notebooks (1)
+├── graphs/                  # Output plots from notebooks
+├── data/                    # CSV simulation data (git-ignored)
+├── tests/                   # Unit tests (278 tests)
 └── .github/workflows/       # CI/CD pipelines
 ```
 
@@ -45,22 +59,22 @@ source .venv/bin/activate        # Linux/macOS
 # .venv\Scripts\activate         # Windows
 
 pip install -e ".[dev]"          # With numba JIT (recommended)
-pip install -e ".[gpu,dev]"      # Also installs GPU deps (CuPy, Numba CUDA — not yet used)
+pip install -e ".[gpu,dev]"      # Also installs GPU deps (CuPy, Numba CUDA)
 ```
 
 ### Verify
 
 ```bash
-pytest                           # 211 tests
+pytest                           # 278 tests
 ruff check .                     # Lint
 ```
 
 ### Evaluate your parameters
 
-Before running a simulation, open the **[parameter evaluation notebook](src/notebooks/parameter_evaluation.ipynb)** to check that your configuration will produce outbursts:
+Before running a simulation, open the **[parameter evaluation notebook](notebooks/tools/parameter_evaluation.ipynb)** to check that your configuration will produce outbursts:
 
 ```bash
-jupyter notebook src/notebooks/parameter_evaluation.ipynb
+jupyter notebook notebooks/tools/parameter_evaluation.ipynb
 ```
 
 Edit the parameter cell (M_star, R_K, R_N, M_dot, dt_mult, etc.), run all cells, and check for **PASS**. The notebook will:
@@ -80,7 +94,19 @@ With numba installed (`pip install -e ".[dev]"`), a typical 1-million-timestep s
 
 When numba is not installed, `@cpu_jit` falls back to a transparent passthrough — all code runs correctly in pure Python.
 
-> **Note:** A `gpu_jit` decorator is defined in `__init__.py` (CUDA → CPU JIT → passthrough) but is not currently used by any module. GPU acceleration via CuPy and Numba CUDA is available as optional dependencies for future integration but does not affect current simulation performance.
+### GPU Acceleration
+
+The `blackhole.gpu` subpackage provides a fully vectorized alternative path that keeps all arrays GPU-resident via CuPy. All physics functions (opacity, viscosity, disk physics, evolution) are reimplemented as pure array operations — no JIT required.
+
+The temperature solver uses a **fused CUDA RawKernel** where each thread independently runs the full secant solve (50 iterations × 5-regime opacity computation + 7 fallback guesses) for one grid point in a single kernel launch — eliminating ~500 per-iteration kernel launches and all Python-level loop overhead. The scale-height solver replaces the iterative secant method with a **direct quadratic formula**: the pressure balance `P_gas/H + P_rad = hydro·H` is solved analytically as `H = (P_rad + sqrt(P_rad² + 4·hydro·gas)) / (2·hydro)`. On CPU (NumPy), a batched vectorized secant method with fused ElementwiseKernel residuals is used as fallback.
+
+The Crank-Nicolson implicit diffusion step uses a **custom Thomas algorithm CUDA RawKernel** — a single kernel launch performing O(N) forward elimination and backward substitution entirely on GPU, eliminating cuSPARSE CSR matrix construction and analysis overhead (cuSPARSE retained as fallback). On CPU (NumPy path), the solver uses `scipy.linalg.solve_banded` for the optimal LAPACK Thomas algorithm.
+
+The GPU simulation orchestrator (`gpu.simulation.run_simulation`) mirrors the CPU timestep loop but runs all physics through the `gpu` subpackage. Only `add_mass` (inherently sequential) transfers to CPU; all other operations stay on device.
+
+On Windows, `blackhole.gpu.__init__` automatically registers NVIDIA pip-package DLL directories (`site-packages/nvidia/*/bin/`) at import time, ensuring CUDA libraries (cusparse, cusolver, etc.) load correctly even when the system CUDA Toolkit version differs from the CuPy build target.
+
+GPU notebooks are provided for the three main simulation configurations: BH base, BH irradiation+evaporation, and Sgr A*. All GPU notebooks include built-in **performance profiling** via `PerformanceLogger`, which records per-stage wall-clock timing with GPU sync barriers and saves timestamped logs for historical comparison. GPU notebooks use N_base=10,000 (10,003 grid points) to amortize kernel launch overhead. For grids smaller than 500 points, `run_simulation` automatically falls back to CPU. When CuPy is not available, the GPU subpackage falls back transparently to NumPy — all code runs correctly on CPU.
 
 ## Package Modules
 
@@ -94,9 +120,10 @@ When numba is not installed, `@cpu_jit` falls back to a transparent passthrough 
 | `irradiation` | X-ray irradiation feedback: flux, epsilon parameter, critical surface densities (Sigma_max/min), critical temperatures (T_c_max/min), irradiation-modified alpha viscosity | No |
 | `evolution` | Surface density time-stepping via viscous diffusion (explicit or Crank-Nicolson implicit), mass addition at transfer radius, tidal torques, disk evaporation | No |
 | `solvers` | Newton-method solvers for energy balance (midplane temperature) and hydrostatic equilibrium (scale height) | Root fns |
-| `luminosity` | Radiative luminosity diagnostics (total and per-annulus) and effective temperature profiles | No |
+| `luminosity` | Radiative luminosity diagnostics (total and per-annulus) and effective temperature profiles. Overflow guards replace inf/nan with 0 for numerical robustness at fine grids (N >= 10,000) where stiff outburst fronts can produce divergent surface densities | No |
 | `cr_solvers` | Critical-regime steady-state disk structure: radiation pressure, Keplerian omega, scale height, coupled rho-T solver via Levenberg-Marquardt | No |
 | `parameter_evaluation` | Pre-flight parameter checks: mass deposition constraint, DIM instability criterion, and thermal resolution advisory | No |
+| `gpu` | GPU-accelerated subpackage: vectorized opacity, disk physics, viscosity, evolution, luminosity (with overflow guards), fused temperature RawKernel (full secant solve per thread), analytical quadratic scale height, Thomas algorithm tridiagonal RawKernel, per-stage performance profiler (`perf_logger`), and simulation orchestrator. Pure NumPy/CuPy array ops (no JIT). Transparent CPU fallback when CuPy is absent. Auto-registers NVIDIA DLL directories on Windows. | No |
 
 ## Notebooks
 
@@ -106,7 +133,7 @@ The recommended workflow is: **(1) evaluate parameters** → **(2) run simulatio
 
 | Notebook | Description |
 |----------|-------------|
-| `parameter_evaluation` | **Start here.** Interactive pre-flight checks for your simulation parameters. Edit M_star, R_K, R_N, M_dot, and dt_mult, then run to verify mass deposition, DIM instability, and thermal resolution constraints. Includes a comparison table of all 7 reference configurations and parameter sensitivity sweeps (dt_mult and M_dot) with plots. |
+| `tools/parameter_evaluation` | **Start here.** Interactive pre-flight checks for your simulation parameters. Edit M_star, R_K, R_N, M_dot, and dt_mult, then run to verify mass deposition, DIM instability, and thermal resolution constraints. Includes a comparison table of all 7 reference configurations and parameter sensitivity sweeps (dt_mult and M_dot) with plots. |
 
 ### Steady-State Analysis
 
@@ -114,27 +141,31 @@ These notebooks explore the equilibrium disk structure and the physics of indivi
 
 | Notebook | Description |
 |----------|-------------|
-| `opacity_constants` | Opacity regime calculations: electron scattering, bound-free, H-minus, molecular, and conduction opacities plotted as functions of temperature and density |
-| `viscosity_temperature_dependence` | Temperature-dependent alpha viscosity model with irradiation effects: plots the smooth alpha(T) transition and irradiation-modified critical temperatures |
-| `steady_state_disk_structure` | Full Shakura-Sunyaev steady-state disk structure with 3 regions (inner/middle/outer): solves for temperature, density, scale height, and pressure as functions of radius |
-| `steady_state_disk_subplots` | Extended steady-state disk variable plots: multi-panel visualizations of radial disk profiles using the `Variable_plot` helper |
-| `opacity_model_comparison` | Comparison of standard SS73 and Critical-Regime (CR) steady-state models: T-Sigma S-curves, temperature vs radius, scale height vs radius, with fixed and variable alpha |
+| `steady_state/opacity_regimes` | Opacity regime calculations: electron scattering, bound-free, H-minus, molecular, and conduction opacities plotted as functions of temperature and density |
+| `steady_state/alpha_viscosity` | Temperature-dependent alpha viscosity model with irradiation effects: plots the smooth alpha(T) transition and irradiation-modified critical temperatures |
+| `steady_state/disk_structure` | Full Shakura-Sunyaev steady-state disk structure with 3 regions (inner/middle/outer): solves for temperature, density, scale height, and pressure as functions of radius |
+| `steady_state/disk_subplots` | Extended steady-state disk variable plots: multi-panel visualizations of radial disk profiles using the `Variable_plot` helper |
+| `steady_state/model_comparison` | Comparison of standard SS73 and Critical-Regime (CR) steady-state models: T-Sigma S-curves, temperature vs radius, scale height vs radius, with fixed and variable alpha |
 
 ### Time-Dependent Simulations
 
-Each notebook runs a full disk instability simulation from a fresh initial disk. They produce CSV history files in `src/data/` that can be visualized by the plotting notebooks. All simulations use the same 4-cell structure: (1) parameters & grid setup, (2) timestep config, (3) fresh disk initialization, (4) main simulation loop with CSV I/O.
+Each notebook runs a full disk instability simulation from a fresh initial disk. They produce CSV history files in `data/` that can be visualized by the plotting notebooks. All simulations use the same 4-cell structure: (1) parameters & grid setup, (2) timestep config, (3) fresh disk initialization, (4) main simulation loop with CSV I/O.
 
 | Notebook | Object | M_star | R_in (cm) | R_out (cm) | M_dot (g/s) | Irradiation | Evaporation | CSV suffix | dt multiplier | Timesteps |
 |----------|--------|--------|-----------|------------|-------------|-------------|-------------|------------|---------------|-----------|
-| `wd_timedep_simulation` | White dwarf | 1 M_sun | 5e8 | 8e10 | 5e16 | No | No | `_wd` | 10x | 1,000,001 |
-| `bh_timedep_simulation` | BH base | 9 M_sun | 5e8 | 4.2e11 | 3e17 | No | No | `_bh` | 30x | 1,500,001 |
-| `bh_noeffects_timedep_simulation` | BH (9 M_sun) | 9 M_sun | 5e8 | 4.2e11 | 1e17 | No | No | `_bhne` | 30x | 1,500,001 |
-| `bh_irradiation_timedep_simulation` | BH (9 M_sun) | 9 M_sun | 5e8 | 4.2e11 | 1e17 | Yes | No | `_ir` | 20–30x | 500,001   |
-| `bh_evaporation_timedep_simulation` | BH (9 M_sun) | 9 M_sun | 5e8 | 4.2e11 | 1e17 | No | Yes | `_ev` | 30–100x | 100,001   |
-| `bh_iradevap_timedep_simulation` | BH (9 M_sun) | 9 M_sun | 5e8 | 4.2e11 | 1e17 | Yes | Yes | `_irev` | 30x | 500,001   |
-| `sgr_a_timedep_simulation` | Sgr A* SMBH | 4.3e6 M_sun | 4e12 | 2e15 | 1e22 | Yes | Yes | _(none)_ | 10–300x (clamped) | 250,001   |
+| `simulations/wd` | White dwarf | 1 M_sun | 5e8 | 8e10 | 5e16 | No | No | `_wd` | 10x | 1,000,001 |
+| `simulations/bh_base` | BH base | 9 M_sun | 5e8 | 4.2e11 | 3e17 | No | No | `_bh` | 30x | 1,500,001 |
+| `simulations/bh_noeffects` | BH (9 M_sun) | 9 M_sun | 5e8 | 4.2e11 | 1e17 | No | No | `_bhne` | 30x | 1,500,001 |
+| `simulations/bh_irradiation` | BH (9 M_sun) | 9 M_sun | 5e8 | 4.2e11 | 1e17 | Yes | No | `_ir` | 20–30x | 500,001   |
+| `simulations/bh_evaporation` | BH (9 M_sun) | 9 M_sun | 5e8 | 4.2e11 | 1e17 | No | Yes | `_ev` | 30–100x | 100,001   |
+| `simulations/bh_iradevap` | BH (9 M_sun) | 9 M_sun | 5e8 | 4.2e11 | 1e17 | Yes | Yes | `_irev` | 30x | 500,001   |
+| `simulations/sgr_a` | Sgr A* SMBH | 4.3e6 M_sun | 4e12 | 2e15 | 1e22 | Yes | Yes | _(none)_ | 10–300x (clamped) | 250,001   |
+| **GPU variants** | | | | | | | | | |           |
+| `simulations/gpu_bh_base` | BH base (GPU, N=10k) | 9 M_sun | 5e8 | 4.2e11 | 3e17 | No | No | `_bh_gpu` | auto | 200,001   |
+| `simulations/gpu_bh_iradevap` | BH irrad+evap (GPU, N=10k) | 9 M_sun | 5e8 | 4.2e11 | 1e17 | Yes | Yes | `_irev_gpu` | auto | 200,001   |
+| `simulations/gpu_sgr_a` | Sgr A* SMBH (GPU, N=10k) | 4.3e6 M_sun | 4e12 | 2e15 | 1e22 | Yes | Yes | `_gpu` | auto | 500,001   |
 
-Each simulation saves 6 CSV files to `src/data/`:
+Each simulation saves 6 CSV files to `data/`:
 - `Sigma_history_bath_array{suffix}.csv` - Surface density snapshots
 - `Temp_history_bath_array{suffix}.csv` - Midplane temperature snapshots
 - `H_history_bath_array{suffix}.csv` - Scale height snapshots
@@ -148,14 +179,17 @@ These notebooks load pre-computed CSV data and produce publication-quality plots
 
 | Notebook | Description | Requires data from |
 |----------|-------------|--------------------|
-| `outburst_lightcurves` | Multi-model comparison: mass accretion rate, luminosity, outer radius vs time for WD, BH, and SMBH models. Includes animations and outburst period analysis. | All simulation notebooks |
-| `wd_outburst_plots` | White dwarf 3-panel plot: mass accretion rate, luminosity, and outer radius vs time (years) | `wd_timedep_simulation` |
-| `bh_outburst_plots` | BH base 3-panel plot: mass accretion rate, luminosity, and outer radius vs time (years) | `bh_timedep_simulation` |
-| `bh_noeffects_outburst_plots` | BH (9 M_sun) no-effects 3-panel plot: mass accretion rate, luminosity, and outer radius vs time (years) | `bh_noeffects_timedep_simulation` |
-| `bh_irradiation_outburst_plots` | BH (9 M_sun) irradiation 3-panel plot: mass accretion rate, luminosity, and outer radius vs time (years) | `bh_irradiation_timedep_simulation` |
-| `bh_evaporation_outburst_plots` | BH (9 M_sun) evaporation 3-panel plot: mass accretion rate, luminosity, and outer radius vs time (years) | `bh_evaporation_timedep_simulation` |
-| `bh_iradevap_outburst_plots` | BH (9 M_sun) irradiation+evaporation 3-panel plot: mass accretion rate, luminosity, and outer radius vs time (years) | `bh_iradevap_timedep_simulation` |
-| `sgr_a_outburst_plots` | Sgr A* focused: 3-panel plot of mass accretion rate, luminosity, and outer radius vs time (years) | `sgr_a_timedep_simulation` |
+| `visualization/lightcurves` | Multi-model comparison: mass accretion rate, luminosity, outer radius vs time for WD, BH, and SMBH models. Includes animations and outburst period analysis. | All simulation notebooks |
+| `visualization/wd` | White dwarf 3-panel plot: mass accretion rate, luminosity, and outer radius vs time (years) | `simulations/wd` |
+| `visualization/bh_base` | BH base 3-panel plot: mass accretion rate, luminosity, and outer radius vs time (years) | `simulations/bh_base` |
+| `visualization/bh_noeffects` | BH (9 M_sun) no-effects 3-panel plot: mass accretion rate, luminosity, and outer radius vs time (years) | `simulations/bh_noeffects` |
+| `visualization/bh_irradiation` | BH (9 M_sun) irradiation 3-panel plot: mass accretion rate, luminosity, and outer radius vs time (years) | `simulations/bh_irradiation` |
+| `visualization/bh_evaporation` | BH (9 M_sun) evaporation 3-panel plot: mass accretion rate, luminosity, and outer radius vs time (years) | `simulations/bh_evaporation` |
+| `visualization/bh_iradevap` | BH (9 M_sun) irradiation+evaporation 3-panel plot: mass accretion rate, luminosity, and outer radius vs time (years) | `simulations/bh_iradevap` |
+| `visualization/sgr_a` | Sgr A* focused: 3-panel plot of mass accretion rate, luminosity, and outer radius vs time (years) | `simulations/sgr_a` |
+| `visualization/gpu_bh_base` | GPU BH base 3-panel plot: mass accretion rate, luminosity, and outer radius vs time (years) | `simulations/gpu_bh_base` |
+| `visualization/gpu_bh_iradevap` | GPU BH irradiation+evaporation 3-panel plot: mass accretion rate, luminosity, and outer radius vs time (years) | `simulations/gpu_bh_iradevap` |
+| `visualization/gpu_sgr_a` | GPU Sgr A* 3-panel plot: mass accretion rate, luminosity, and outer radius vs time (years) | `simulations/gpu_sgr_a` |
 
 ## Physics Overview
 
@@ -225,9 +259,13 @@ The viscous diffusion step in `evolve_surface_density` supports both explicit an
 | Crank-Nicolson (Crank & Nicolson 1947) | 0.5 | **Unconditionally stable** | O(dt²) | All production simulations |
 | Backward Euler (implicit) | 1.0 | Unconditionally stable | O(dt) | Maximum damping |
 
-All time-dependent simulation notebooks use **Crank-Nicolson (`theta=0.5`)** with timestep multipliers (10x for WD, 20–30x for BH, 10–300x for Sgr A* clamped to dt_max) to cover sufficient physical time for outburst cycles. The implicit scheme solves a tridiagonal system via `scipy.linalg.solve_banded` at O(N) cost per timestep — the same computational cost as the explicit scheme — while allowing timesteps well beyond the CFL stability limit.
+All time-dependent simulation notebooks use **Crank-Nicolson (`theta=0.5`)** with timestep multipliers (10x for WD, 20–30x for BH, 10–300x for Sgr A* clamped to dt_max) to cover sufficient physical time for outburst cycles. The implicit scheme solves a tridiagonal system at O(N) cost per timestep — the same computational cost as the explicit scheme — while allowing timesteps well beyond the CFL stability limit. On CPU, the solve uses `scipy.linalg.solve_banded` (LAPACK Thomas algorithm); on GPU, it uses a custom Thomas algorithm CUDA RawKernel (single kernel launch, O(N) forward elimination + backward substitution), keeping the entire diffusion step GPU-resident.
 
 Tidal torques and evaporation are applied as explicit operator-split source terms after the implicit diffusion step, as they are small corrections that do not drive the CFL constraint. The BH evaporation and Sgr A* simulations additionally employ an **adaptive thermal-timescale constraint** that reduces `dt` during outbursts to resolve the alpha transition (see Thermal Timescale Constraint).
+
+**Luminosity overflow guards**: At fine grids (N >= 10,000), stiff outburst fronts can produce numerically divergent surface densities (Sigma up to ~10^193 g/cm²). The `nu * Sigma / r` products in the luminosity calculations can then overflow float64. Both `luminosity.py` and `gpu/luminosity.py` guard against this by replacing inf/nan values with 0 in `L_rad`, `L_rad_array`, and `T_eff` before returning results. The GPU visualization notebooks additionally cap per-annulus luminosity at the Eddington limit (`L_edd = 1.3e38 * M/M_sun`) and skip the innermost boundary cells (`N_skip = N // 100`) to produce physically bounded plots.
+
+**Adaptive theta (Courant-number guard)**: At fine grids (N >= 10,000), the grid spacing dX is much smaller, causing the local Courant number `c_i * nu_i` (where `c_i = 12*dt/(X_i²*dX²)`) to exceed 1 during outbursts. When this happens, the Crank-Nicolson (theta=0.5) explicit component produces oscillatory negative S values. Cells that go negative get clamped to `min_Sigma`, creating mass from nothing (neighbors received the diffused mass but the source is reset), leading to exponential Sigma growth. Both `evolution.py` and `gpu/evolution.py` detect this condition and automatically fall back to backward Euler (theta=1.0), which eliminates the explicit component entirely. Backward Euler guarantees positivity via the M-matrix property of the implicit system, at the cost of reducing temporal accuracy from O(dt²) to O(dt) — irrelevant when dt is already far beyond the CFL limit.
 
 ### Mass Deposition Constraint
 
@@ -335,8 +373,8 @@ The parameter evaluation tool reports `thermal_resolution_ok` and `thermal_margi
 - **Python 3.12+**
 - **NumPy/SciPy** - Scientific computing and numerical methods
 - **Numba** - CPU JIT compilation for physics functions via `@cpu_jit` (optional, falls back to pure Python)
-- **CuPy** - GPU array operations (optional dependency, not yet integrated into simulations)
-- **Numba CUDA** - GPU JIT via `@gpu_jit` decorator (optional dependency, defined but not yet used)
+- **CuPy** - GPU array operations via `blackhole.gpu` subpackage (optional, falls back to NumPy)
+- **Numba CUDA** - GPU JIT via `@gpu_jit` decorator (optional)
 - **Matplotlib** - Visualization
 - **Pandas** - Data I/O for simulation histories
 
