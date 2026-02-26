@@ -230,6 +230,13 @@ def evolve_surface_density(Sigma, dt, nu, X, dX, N, min_Sigma,
         # c_i = 12 * dt / (X_i^2 * dX^2)
         c = 12.0 * dt / (X[1:-1] ** 2 * dX ** 2)
 
+        # Adaptive theta: if the local Courant number c_i * nu_i exceeds 1,
+        # the CN explicit part would produce oscillatory (negative) S values.
+        # Fall back to backward Euler (theta=1.0) which guarantees positivity.
+        max_courant = float(np.max(c * nu[1:-1]))
+        if max_courant > 1.0 and theta < 1.0:
+            theta = 1.0
+
         # Explicit part: rhs = S^n + (1-theta) * explicit_diffusion
         rhs = S_arr[1:-1].copy()
         expl_weight = 1.0 - theta

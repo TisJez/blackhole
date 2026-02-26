@@ -28,9 +28,10 @@ blackhole/
 │           ├── opacity.py   # Vectorized opacity functions
 │           ├── disk_physics.py  # Vectorized disk physics
 │           ├── viscosity.py # Vectorized alpha viscosity
-│           ├── solvers.py   # Batched vectorized secant solvers (temperature & scale height)
-│           ├── evolution.py # Vectorized evolution (CFL, diffusion, evaporation); GPU-native sparse tridiagonal solve
+│           ├── solvers.py   # Fused temperature RawKernel; analytical quadratic scale height; batched secant CPU fallback
+│           ├── evolution.py # Vectorized evolution (CFL, diffusion, evaporation); Thomas algorithm CUDA RawKernel
 │           ├── luminosity.py # Vectorized luminosity & T_eff
+│           ├── perf_logger.py # Per-stage wall-clock profiler with GPU sync barriers
 │           └── simulation.py # GPU simulation orchestrator (SimulationConfig + run_simulation)
 ├── notebooks/               # Jupyter notebooks
 │   ├── steady_state/        # Equilibrium disk analysis (5)
@@ -39,7 +40,7 @@ blackhole/
 │   └── tools/               # Utility notebooks (1)
 ├── graphs/                  # Output plots from notebooks
 ├── data/                    # CSV simulation data (git-ignored)
-├── tests/                   # Unit tests (244 tests)
+├── tests/                   # Unit tests (278 tests)
 └── .github/workflows/       # CI/CD pipelines
 ```
 
@@ -64,7 +65,7 @@ pip install -e ".[gpu,dev]"      # Also installs GPU deps (CuPy, Numba CUDA)
 ### Verify
 
 ```bash
-pytest                           # 244 tests
+pytest                           # 278 tests
 ruff check .                     # Lint
 ```
 
@@ -95,15 +96,17 @@ When numba is not installed, `@cpu_jit` falls back to a transparent passthrough 
 
 ### GPU Acceleration
 
-The `blackhole.gpu` subpackage provides a fully vectorized alternative path that keeps all arrays GPU-resident via CuPy. Instead of looping N grid points with scalar secant solves, the **batched vectorized secant solver** runs one iteration across all N points simultaneously via array operations. All physics functions (opacity, viscosity, disk physics, evolution) are reimplemented as pure array operations — no JIT required.
+The `blackhole.gpu` subpackage provides a fully vectorized alternative path that keeps all arrays GPU-resident via CuPy. All physics functions (opacity, viscosity, disk physics, evolution) are reimplemented as pure array operations — no JIT required.
 
-The Crank-Nicolson implicit diffusion step uses a **GPU-native sparse tridiagonal solve** via `cupyx.scipy.sparse.linalg.spsolve` (cuSPARSE LU). For tridiagonal matrices, LU factorisation has zero fill-in, giving O(N) complexity — the same as the Thomas algorithm. The entire diffusion step stays GPU-resident with no CPU transfers. On CPU (NumPy path), the solver uses `scipy.linalg.solve_banded` for the optimal LAPACK Thomas algorithm.
+The temperature solver uses a **fused CUDA RawKernel** where each thread independently runs the full secant solve (50 iterations × 5-regime opacity computation + 7 fallback guesses) for one grid point in a single kernel launch — eliminating ~500 per-iteration kernel launches and all Python-level loop overhead. The scale-height solver replaces the iterative secant method with a **direct quadratic formula**: the pressure balance `P_gas/H + P_rad = hydro·H` is solved analytically as `H = (P_rad + sqrt(P_rad² + 4·hydro·gas)) / (2·hydro)`. On CPU (NumPy), a batched vectorized secant method with fused ElementwiseKernel residuals is used as fallback.
+
+The Crank-Nicolson implicit diffusion step uses a **custom Thomas algorithm CUDA RawKernel** — a single kernel launch performing O(N) forward elimination and backward substitution entirely on GPU, eliminating cuSPARSE CSR matrix construction and analysis overhead (cuSPARSE retained as fallback). On CPU (NumPy path), the solver uses `scipy.linalg.solve_banded` for the optimal LAPACK Thomas algorithm.
 
 The GPU simulation orchestrator (`gpu.simulation.run_simulation`) mirrors the CPU timestep loop but runs all physics through the `gpu` subpackage. Only `add_mass` (inherently sequential) transfers to CPU; all other operations stay on device.
 
 On Windows, `blackhole.gpu.__init__` automatically registers NVIDIA pip-package DLL directories (`site-packages/nvidia/*/bin/`) at import time, ensuring CUDA libraries (cusparse, cusolver, etc.) load correctly even when the system CUDA Toolkit version differs from the CuPy build target.
 
-GPU notebooks are provided for the three main simulation configurations: BH base, BH irradiation+evaporation, and Sgr A*. GPU notebooks use N_base=10,000 (10,003 grid points) to amortize kernel launch overhead. For grids smaller than 500 points, `run_simulation` automatically falls back to CPU. When CuPy is not available, the GPU subpackage falls back transparently to NumPy — all code runs correctly on CPU.
+GPU notebooks are provided for the three main simulation configurations: BH base, BH irradiation+evaporation, and Sgr A*. All GPU notebooks include built-in **performance profiling** via `PerformanceLogger`, which records per-stage wall-clock timing with GPU sync barriers and saves timestamped logs for historical comparison. GPU notebooks use N_base=10,000 (10,003 grid points) to amortize kernel launch overhead. For grids smaller than 500 points, `run_simulation` automatically falls back to CPU. When CuPy is not available, the GPU subpackage falls back transparently to NumPy — all code runs correctly on CPU.
 
 ## Package Modules
 
@@ -120,7 +123,7 @@ GPU notebooks are provided for the three main simulation configurations: BH base
 | `luminosity` | Radiative luminosity diagnostics (total and per-annulus) and effective temperature profiles. Overflow guards replace inf/nan with 0 for numerical robustness at fine grids (N >= 10,000) where stiff outburst fronts can produce divergent surface densities | No |
 | `cr_solvers` | Critical-regime steady-state disk structure: radiation pressure, Keplerian omega, scale height, coupled rho-T solver via Levenberg-Marquardt | No |
 | `parameter_evaluation` | Pre-flight parameter checks: mass deposition constraint, DIM instability criterion, and thermal resolution advisory | No |
-| `gpu` | GPU-accelerated subpackage: vectorized opacity, disk physics, viscosity, evolution, luminosity (with overflow guards), batched secant solvers, GPU-native sparse tridiagonal solver, and simulation orchestrator. Pure NumPy/CuPy array ops (no JIT). Transparent CPU fallback when CuPy is absent. Auto-registers NVIDIA DLL directories on Windows. | No |
+| `gpu` | GPU-accelerated subpackage: vectorized opacity, disk physics, viscosity, evolution, luminosity (with overflow guards), fused temperature RawKernel (full secant solve per thread), analytical quadratic scale height, Thomas algorithm tridiagonal RawKernel, per-stage performance profiler (`perf_logger`), and simulation orchestrator. Pure NumPy/CuPy array ops (no JIT). Transparent CPU fallback when CuPy is absent. Auto-registers NVIDIA DLL directories on Windows. | No |
 
 ## Notebooks
 
@@ -157,10 +160,10 @@ Each notebook runs a full disk instability simulation from a fresh initial disk.
 | `simulations/bh_evaporation` | BH (9 M_sun) | 9 M_sun | 5e8 | 4.2e11 | 1e17 | No | Yes | `_ev` | 30–100x | 100,001   |
 | `simulations/bh_iradevap` | BH (9 M_sun) | 9 M_sun | 5e8 | 4.2e11 | 1e17 | Yes | Yes | `_irev` | 30x | 500,001   |
 | `simulations/sgr_a` | Sgr A* SMBH | 4.3e6 M_sun | 4e12 | 2e15 | 1e22 | Yes | Yes | _(none)_ | 10–300x (clamped) | 250,001   |
-| **GPU variants** | | | | | | | | | | |
-| `simulations/gpu_bh_base` | BH base (GPU, N=10k) | 9 M_sun | 5e8 | 4.2e11 | 3e17 | No | No | `_bh_gpu` | auto | 500,001 |
-| `simulations/gpu_bh_iradevap` | BH irrad+evap (GPU, N=10k) | 9 M_sun | 5e8 | 4.2e11 | 1e17 | Yes | Yes | `_irev_gpu` | auto | 200,001 |
-| `simulations/gpu_sgr_a` | Sgr A* SMBH (GPU, N=10k) | 4.3e6 M_sun | 4e12 | 2e15 | 1e22 | Yes | Yes | `_gpu` | auto | 50,001 |
+| **GPU variants** | | | | | | | | | |           |
+| `simulations/gpu_bh_base` | BH base (GPU, N=10k) | 9 M_sun | 5e8 | 4.2e11 | 3e17 | No | No | `_bh_gpu` | auto | 200,001   |
+| `simulations/gpu_bh_iradevap` | BH irrad+evap (GPU, N=10k) | 9 M_sun | 5e8 | 4.2e11 | 1e17 | Yes | Yes | `_irev_gpu` | auto | 200,001   |
+| `simulations/gpu_sgr_a` | Sgr A* SMBH (GPU, N=10k) | 4.3e6 M_sun | 4e12 | 2e15 | 1e22 | Yes | Yes | `_gpu` | auto | 500,001   |
 
 Each simulation saves 6 CSV files to `data/`:
 - `Sigma_history_bath_array{suffix}.csv` - Surface density snapshots
@@ -256,11 +259,13 @@ The viscous diffusion step in `evolve_surface_density` supports both explicit an
 | Crank-Nicolson (Crank & Nicolson 1947) | 0.5 | **Unconditionally stable** | O(dt²) | All production simulations |
 | Backward Euler (implicit) | 1.0 | Unconditionally stable | O(dt) | Maximum damping |
 
-All time-dependent simulation notebooks use **Crank-Nicolson (`theta=0.5`)** with timestep multipliers (10x for WD, 20–30x for BH, 10–300x for Sgr A* clamped to dt_max) to cover sufficient physical time for outburst cycles. The implicit scheme solves a tridiagonal system at O(N) cost per timestep — the same computational cost as the explicit scheme — while allowing timesteps well beyond the CFL stability limit. On CPU, the solve uses `scipy.linalg.solve_banded` (LAPACK Thomas algorithm); on GPU, it uses `cupyx.scipy.sparse.linalg.spsolve` (cuSPARSE LU with zero fill-in for tridiagonal matrices), keeping the entire diffusion step GPU-resident.
+All time-dependent simulation notebooks use **Crank-Nicolson (`theta=0.5`)** with timestep multipliers (10x for WD, 20–30x for BH, 10–300x for Sgr A* clamped to dt_max) to cover sufficient physical time for outburst cycles. The implicit scheme solves a tridiagonal system at O(N) cost per timestep — the same computational cost as the explicit scheme — while allowing timesteps well beyond the CFL stability limit. On CPU, the solve uses `scipy.linalg.solve_banded` (LAPACK Thomas algorithm); on GPU, it uses a custom Thomas algorithm CUDA RawKernel (single kernel launch, O(N) forward elimination + backward substitution), keeping the entire diffusion step GPU-resident.
 
 Tidal torques and evaporation are applied as explicit operator-split source terms after the implicit diffusion step, as they are small corrections that do not drive the CFL constraint. The BH evaporation and Sgr A* simulations additionally employ an **adaptive thermal-timescale constraint** that reduces `dt` during outbursts to resolve the alpha transition (see Thermal Timescale Constraint).
 
 **Luminosity overflow guards**: At fine grids (N >= 10,000), stiff outburst fronts can produce numerically divergent surface densities (Sigma up to ~10^193 g/cm²). The `nu * Sigma / r` products in the luminosity calculations can then overflow float64. Both `luminosity.py` and `gpu/luminosity.py` guard against this by replacing inf/nan values with 0 in `L_rad`, `L_rad_array`, and `T_eff` before returning results. The GPU visualization notebooks additionally cap per-annulus luminosity at the Eddington limit (`L_edd = 1.3e38 * M/M_sun`) and skip the innermost boundary cells (`N_skip = N // 100`) to produce physically bounded plots.
+
+**Adaptive theta (Courant-number guard)**: At fine grids (N >= 10,000), the grid spacing dX is much smaller, causing the local Courant number `c_i * nu_i` (where `c_i = 12*dt/(X_i²*dX²)`) to exceed 1 during outbursts. When this happens, the Crank-Nicolson (theta=0.5) explicit component produces oscillatory negative S values. Cells that go negative get clamped to `min_Sigma`, creating mass from nothing (neighbors received the diffused mass but the source is reset), leading to exponential Sigma growth. Both `evolution.py` and `gpu/evolution.py` detect this condition and automatically fall back to backward Euler (theta=1.0), which eliminates the explicit component entirely. Backward Euler guarantees positivity via the M-matrix property of the implicit system, at the cost of reducing temporal accuracy from O(dt²) to O(dt) — irrelevant when dt is already far beyond the CFL limit.
 
 ### Mass Deposition Constraint
 

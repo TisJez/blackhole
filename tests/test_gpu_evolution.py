@@ -129,6 +129,42 @@ class TestEvolveSurfaceDensity:
         )
         np.testing.assert_allclose(gpu, cpu, rtol=1e-10)
 
+    def test_adaptive_theta_prevents_negative_sigma(self):
+        """When Courant >> 1, adaptive theta falls back to backward Euler,
+        keeping Sigma positive and physically bounded."""
+        N = 1000
+        r_in = 1e9
+        r_out = 1e12
+        r = np.linspace(r_in, r_out, N)
+        X = X_func(r)
+        dX = X[1] - X[0]
+        min_Sigma = 1e-10
+
+        # Create a sharp Sigma peak (simulating a deposition front)
+        Sigma = np.full(N, 1.0)
+        peak = N // 2
+        Sigma[peak - 5:peak + 5] = 1000.0
+
+        # High viscosity to push Courant number well above 1
+        nu = np.full(N, 1e15)
+
+        # Large dt that would make Courant >> 1 with CN
+        dt_cfl = gpu_evol.calculate_timestep(X, nu, dX)
+        dt = dt_cfl * 1000  # 1000x CFL → Courant ~ 1000
+
+        result = gpu_evol.evolve_surface_density(
+            Sigma, dt, nu, X, dX, N, min_Sigma, theta=0.5,
+        )
+
+        # Sigma must remain positive everywhere (no negative → clamped blowup)
+        assert np.all(result >= min_Sigma), (
+            f"Sigma went negative: min={result.min():.2e}"
+        )
+        # Sigma must not grow beyond the initial peak (diffusion only spreads)
+        assert result.max() <= Sigma.max() * 1.1, (
+            f"Sigma grew: max={result.max():.2e} vs initial {Sigma.max():.2e}"
+        )
+
     def test_evaporation_capped(self):
         N = 100
         min_Sigma = 1e-5

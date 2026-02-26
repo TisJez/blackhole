@@ -62,7 +62,7 @@ This additionally installs: numba, numba-cuda, cupy-cuda12x
 python -c "from blackhole.constants import G; print('Package OK, G =', G)"
 
 # Run tests
-pytest                     # 244 tests
+pytest                     # 278 tests
 
 # Lint
 ruff check .
@@ -157,7 +157,7 @@ The simulation notebooks are independent — each initializes a fresh disk. Run 
 ## Running Tests
 
 ```bash
-pytest                    # Run all 244 tests
+pytest                    # Run all 278 tests
 pytest tests/ -v          # Verbose output
 pytest -k "test_opacity"  # Run specific tests by name
 ```
@@ -198,9 +198,10 @@ blackhole/
 │           ├── opacity.py                      # Vectorized opacity
 │           ├── disk_physics.py                 # Vectorized disk physics
 │           ├── viscosity.py                    # Vectorized alpha viscosity
-│           ├── solvers.py                      # Batched secant solvers
-│           ├── evolution.py                    # Vectorized evolution; GPU-native sparse tridiagonal solve
+│           ├── solvers.py                      # Fused temperature RawKernel; analytical quadratic scale height
+│           ├── evolution.py                    # Vectorized evolution; Thomas algorithm CUDA RawKernel
 │           ├── luminosity.py                   # Vectorized luminosity
+│           ├── perf_logger.py                  # Per-stage wall-clock profiler with GPU sync barriers
 │           └── simulation.py                   # GPU simulation orchestrator
 ├── notebooks/                                  # Jupyter notebooks
 │   ├── steady_state/                           # Equilibrium disk analysis
@@ -236,7 +237,7 @@ blackhole/
 │       └── parameter_evaluation.ipynb          # Parameter pre-flight checks
 ├── graphs/                                     # Output plots
 ├── data/                                       # CSV data (git-ignored)
-├── tests/                                      # 244 unit tests
+├── tests/                                      # 278 unit tests
 └── .github/workflows/                          # CI/CD
 ```
 

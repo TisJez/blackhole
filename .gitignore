@@ -13,4 +13,8 @@ __pycache__/
 
 # Simulation data
 data/*.csv
+
+# Performance logs (keep directory structure)
+notebooks/simulations/logs/*
+!notebooks/simulations/logs/.gitkeep
 CLAUDE.md

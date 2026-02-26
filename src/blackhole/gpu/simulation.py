@@ -172,13 +172,17 @@ def _compute_irr_quantities(Sigma, nu, r, M_star, M_dot, min_Sigma):
     return xp.asarray(eps, dtype=xp.float64), xp.asarray(flux, dtype=xp.float64)
 
 
-def run_simulation(config):
+def run_simulation(config, perf_logger=None):
     """Run a full time-dependent accretion disk simulation.
 
     Parameters
     ----------
     config : SimulationConfig
         Simulation parameters.
+    perf_logger : PerformanceLogger or None
+        Optional performance logger.  When provided, every stage of the
+        timestep loop is timed (with GPU sync barriers) and results are
+        saved to disk at the end.  ``None`` means no instrumentation.
 
     Returns
     -------
@@ -286,8 +290,15 @@ def run_simulation(config):
 
     totalt = 0.0
 
+    _pl = perf_logger  # short alias (None → no-op)
+
     for timestep in range(cfg.timesteps):
+        if _pl is not None:
+            _pl.set_timestep(timestep)
+
         # --- Stage 1: Add mass (CPU) ---
+        if _pl is not None:
+            _pl.start("add_mass")
         Sigma_host = to_host(Sigma)
         result = add_mass(
             Sigma_host, cfg.M_dot, dt, X_cpu, N, X_K, X_N, dX,
@@ -295,8 +306,12 @@ def run_simulation(config):
         )
         Sigma = xp.asarray(result.Sigma, dtype=xp.float64) if use_device else result.Sigma
         j_val = result.j_val
+        if _pl is not None:
+            _pl.stop()
 
         # --- Evaporation setup ---
+        if _pl is not None:
+            _pl.start("evap_setup")
         evap_func = None
         if cfg.enable_evaporation:
             M_dot_inner = 6.0 * xp.pi * Sigma[1] * nu[1]
@@ -306,32 +321,52 @@ def run_simulation(config):
 
             def evap_func(r_arr, lr=_lr):
                 return disk_evap(r_arr, cfg.M_star, L_ratio=lr)
+        if _pl is not None:
+            _pl.stop()
 
         # --- Stage 2: Evolve surface density ---
+        if _pl is not None:
+            _pl.start("evolve_surface_density")
         tp = cfg.tidal_params if (cfg.tidal_params and j_val >= trunc_rad) else None
         Sigma = evolve_surface_density(
             Sigma, dt, nu, X, dX, N, cfg.min_Sigma,
             tidal_params=tp, evap_func=evap_func,
             theta=cfg.theta,
         )
+        if _pl is not None:
+            _pl.stop()
 
         # --- Stage 3: Irradiation (optional) ---
+        if _pl is not None:
+            _pl.start("irradiation")
         F_irr_arr = None
         eps_irr = None
         if cfg.enable_irradiation:
             eps_irr, F_irr_arr = _compute_irr_quantities(
                 Sigma, nu, r, cfg.M_star, cfg.M_dot, cfg.min_Sigma,
             )
+        if _pl is not None:
+            _pl.stop()
 
         # --- Stage 4: Temperature ---
+        if _pl is not None:
+            _pl.start("solve_temperature")
         T_c = solve_temperature(
             H, Sigma, r, T_c, alpha, cfg.M_star, F_irr=F_irr_arr,
         )
+        if _pl is not None:
+            _pl.stop()
 
         # --- Stage 5: Scale height ---
+        if _pl is not None:
+            _pl.start("solve_scale_height")
         H = solve_scale_height(H, Sigma, r, T_c, cfg.M_star)
+        if _pl is not None:
+            _pl.stop()
 
         # --- Stage 6: Alpha viscosity ---
+        if _pl is not None:
+            _pl.start("alpha_viscosity")
         if cfg.enable_irradiation and eps_irr is not None:
             eps_host = to_host(eps_irr)
             r_host = to_host(r)
@@ -345,9 +380,18 @@ def run_simulation(config):
             alpha = alpha_visc(
                 T_c, alpha_cold=cfg.alpha_cold, alpha_hot=cfg.alpha_hot,
             )
+        if _pl is not None:
+            _pl.stop()
 
         # --- Update viscosity and timestep ---
+        if _pl is not None:
+            _pl.start("kinematic_viscosity")
         nu = kinematic_viscosity(H, r, alpha, cfg.M_star)
+        if _pl is not None:
+            _pl.stop()
+
+        if _pl is not None:
+            _pl.start("thermal_dt_check")
         dt = effective_dt_max
 
         # Thermal-timescale constraint: reduce dt during outbursts
@@ -361,11 +405,15 @@ def run_simulation(config):
             dt = min(dt, cfg.thermal_dt_factor * t_thermal)
 
         dt = max(dt, cfg.dt_min)
+        if _pl is not None:
+            _pl.stop()
 
         totalt += dt
 
         # --- Snapshot ---
         if timestep in output_times:
+            if _pl is not None:
+                _pl.start("snapshot")
             inner_idx = _find_inner_index(Sigma, cfg.min_Sigma)
             Sigma_transfer_history.append(float(Sigma[inner_idx]))
             Sigma_history.append(to_host(Sigma).copy())
@@ -373,6 +421,8 @@ def run_simulation(config):
             H_history.append(to_host(H).copy())
             alpha_history.append(to_host(alpha).copy())
             t_history.append(totalt)
+            if _pl is not None:
+                _pl.stop()
 
     # Always capture final state (even if not in output_times)
     if len(Sigma_history) == 1 or t_history[-1] != totalt:
@@ -383,6 +433,9 @@ def run_simulation(config):
         H_history.append(to_host(H).copy())
         alpha_history.append(to_host(alpha).copy())
         t_history.append(totalt)
+
+    if _pl is not None:
+        _pl.save("logs")
 
     return SimulationResult(
         Sigma_history=Sigma_history,

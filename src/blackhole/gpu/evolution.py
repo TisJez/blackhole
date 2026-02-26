@@ -9,9 +9,56 @@ sequential backward loop.  Use :func:`blackhole.evolution.add_mass` on
 the CPU with a small host transfer (~824 bytes at N=103).
 """
 
+import numpy as np
+
 from blackhole.constants import G, M_sun, c
 from blackhole.gpu import get_xp
 from blackhole.gpu.disk_physics import R_func, S_factor, Sigma_from_S
+
+# Cache for the tridiagonal CSR sparsity pattern (GPU fallback path).
+_tridiag_cache: dict = {}
+
+# Thomas algorithm CUDA kernel for GPU tridiagonal solve.
+# Launched as a single-thread kernel; the Thomas algorithm is O(N) serial work
+# but eliminates all cuSPARSE overhead (CSR construction, analysis phase, etc.).
+_thomas_kernel = None
+
+
+def _get_thomas_kernel():
+    """Lazily compile the Thomas algorithm RawKernel."""
+    global _thomas_kernel
+    if _thomas_kernel is not None:
+        return _thomas_kernel
+    try:
+        import cupy as cp
+
+        _thomas_kernel = cp.RawKernel(
+            r"""
+extern "C" __global__
+void thomas_solve(double* __restrict__ diag,
+                  const double* __restrict__ lower,
+                  const double* __restrict__ upper,
+                  double* __restrict__ rhs,
+                  double* __restrict__ x,
+                  const int n) {
+    // Forward elimination (modifies diag and rhs in-place)
+    for (int i = 1; i < n; i++) {
+        double w = lower[i] / diag[i - 1];
+        diag[i] -= w * upper[i - 1];
+        rhs[i] -= w * rhs[i - 1];
+    }
+    // Backward substitution
+    x[n - 1] = rhs[n - 1] / diag[n - 1];
+    for (int i = n - 2; i >= 0; i--) {
+        x[i] = (rhs[i] - upper[i] * x[i + 1]) / diag[i];
+    }
+}
+""",
+            "thomas_solve",
+        )
+        return _thomas_kernel
+    except Exception:
+        return None
 
 
 def calculate_timestep(X, nu, dX):
@@ -121,6 +168,13 @@ def evolve_surface_density(Sigma, dt, nu, X, dX, N, min_Sigma,
         # Implicit / Crank-Nicolson scheme
         coeff = 12.0 * dt / (X[1:-1] ** 2 * dX ** 2)
 
+        # Adaptive theta: if the local Courant number c_i * nu_i exceeds 1,
+        # the CN explicit part would produce oscillatory (negative) S values.
+        # Fall back to backward Euler (theta=1.0) which guarantees positivity.
+        max_courant = float(xp.max(coeff * nu[1:-1]))
+        if max_courant > 1.0 and theta < 1.0:
+            theta = 1.0
+
         # Explicit part
         rhs = S_arr[1:-1].copy()
         expl_weight = 1.0 - theta
@@ -142,16 +196,56 @@ def evolve_surface_density(Sigma, dt, nu, X, dX, N, min_Sigma,
         rhs_arr[-1] += theta * coeff[-1] * nu[-1] * S_arr[-1]
 
         if xp.__name__ == "cupy":
-            # GPU-native sparse tridiagonal solve via cuSPARSE.
-            # For tridiagonal matrices LU has zero fill-in → O(N).
-            import cupyx.scipy.sparse as sp_sparse
-            import cupyx.scipy.sparse.linalg as sp_linalg
+            _kern = _get_thomas_kernel()
+            if _kern is not None:
+                # Thomas algorithm via single CUDA kernel launch — O(N),
+                # avoids CSR construction + cuSPARSE overhead entirely.
+                # The kernel modifies diag/rhs in-place during forward
+                # elimination, so we pass copies.
+                diag_buf = diag.copy()
+                rhs_buf = rhs_arr.copy()
+                new_S_interior = xp.empty(n_int, dtype=xp.float64)
+                _kern(
+                    (1,), (1,),
+                    (diag_buf, lower, upper, rhs_buf,
+                     new_S_interior, np.int32(n_int)),
+                )
+            else:
+                # Fallback: cuSPARSE sparse tridiagonal solve.
+                import cupyx.scipy.sparse as sp_sparse
+                import cupyx.scipy.sparse.linalg as sp_linalg
 
-            A = sp_sparse.diags(
-                [lower[1:], diag, upper[:-1]], [-1, 0, 1],
-                shape=(n_int, n_int), format="csr",
-            )
-            new_S_interior = sp_linalg.spsolve(A, rhs_arr)
+                if n_int not in _tridiag_cache:
+                    nnz = 3 * n_int - 2
+                    indptr = np.empty(n_int + 1, dtype=np.int32)
+                    indices = np.empty(nnz, dtype=np.int32)
+                    indptr[0] = 0
+                    indptr[1] = 2
+                    indices[0], indices[1] = 0, 1
+                    for i in range(1, n_int - 1):
+                        indptr[i + 1] = indptr[i] + 3
+                        base = 2 + (i - 1) * 3
+                        indices[base] = i - 1
+                        indices[base + 1] = i
+                        indices[base + 2] = i + 1
+                    indptr[n_int] = indptr[n_int - 1] + 2
+                    indices[nnz - 2] = n_int - 2
+                    indices[nnz - 1] = n_int - 1
+                    _tridiag_cache[n_int] = (
+                        xp.asarray(indptr),
+                        xp.asarray(indices),
+                    )
+                cached_indptr, cached_indices = _tridiag_cache[n_int]
+                nnz = 3 * n_int - 2
+                data = xp.empty(nnz, dtype=xp.float64)
+                data[0::3][:n_int] = diag
+                data[1::3][:n_int - 1] = upper[:-1]
+                data[2::3][:n_int - 1] = lower[1:]
+                A = sp_sparse.csr_matrix(
+                    (data, cached_indices, cached_indptr),
+                    shape=(n_int, n_int),
+                )
+                new_S_interior = sp_linalg.spsolve(A, rhs_arr)
         else:
             # CPU path: optimal LAPACK Thomas algorithm via banded solver.
             from scipy.linalg import solve_banded as sp_solve_banded
