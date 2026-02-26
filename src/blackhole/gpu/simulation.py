@@ -246,7 +246,7 @@ def run_simulation(config, perf_logger=None):
     use_device = cfg.use_gpu and is_gpu_available()
 
     # Auto-fallback: GPU overhead exceeds benefit at small N
-    if use_device and N < GPU_N_THRESHOLD:
+    if cfg.use_gpu and N < GPU_N_THRESHOLD:
         warnings.warn(
             f"N={N} is below GPU threshold ({GPU_N_THRESHOLD}); "
             f"falling back to CPU (NumPy). Set N_base >= {GPU_N_THRESHOLD} "
