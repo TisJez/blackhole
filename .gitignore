@@ -12,5 +12,9 @@ __pycache__/
 .ipynb_checkpoints/
 
 # Simulation data
-src/data/*.csv
+data/*.csv
+
+# Performance logs (keep directory structure)
+notebooks/simulations/logs/*
+!notebooks/simulations/logs/.gitkeep
 CLAUDE.md
